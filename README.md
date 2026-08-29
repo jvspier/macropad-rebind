@@ -175,7 +175,15 @@ nothing tells you why.
    interface too, and writing to one of those could misconfigure it.
 2. Click **Read from keypad** to pull in what is currently programmed.
 3. Click a key or knob action, and bind it.
-4. Click **Write to keypad**.
+4. Click **Write to keypad**. It reads the device first and shows a diff — what
+   is on each key now and what it will become — then reads back afterwards and
+   confirms every binding actually stored. A write returning no error is not the
+   same as the device having kept it.
+
+> **Layers are switched on the keypad**, with the button on its edge — not from
+> this page. The indicator LEDs beside the knobs show which layer is live. If a
+> binding writes and verifies but the key still does not type what you set, check
+> you are on the layer you programmed.
 
 Your bindings live in the keypad's own flash. Nothing runs in the background —
 once written, the keypad works on any computer with no software at all.
