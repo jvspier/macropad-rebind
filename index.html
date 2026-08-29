@@ -1118,7 +1118,26 @@ async function writeAll() {
       for (const r of ledReports(l, lay.led)) await send(r);
     }
     layer = saved;
-    log(`Done — ${slots} binding${slots === 1 ? "" : "s"} and ${N_LAYERS} backlight settings written.`, "g");
+    log(`Sent ${slots} binding${slots === 1 ? "" : "s"} and ${N_LAYERS} backlight settings.`);
+
+    // Read it straight back. "The write returned no error" is not the same as
+    // "the device stored it", and on unfamiliar variants that gap is exactly
+    // where the surprises live.
+    log("Verifying — reading the configuration back.", "w");
+    const after = await readDeviceProfile(layout.keys, layout.knobs, false);
+    const left = diffProfiles(after, profile, layout);
+    if (!left.length) {
+      log("Verified — the keypad matches the editor.", "g");
+      log("Layers are switched on the keypad itself, with the button on its edge. " +
+          "If a key does not do what you set, check which layer is live.", "w");
+    } else {
+      log(`${left.length} binding(s) did NOT take:`, "e");
+      for (const r of left.slice(0, 12))
+        log(`   ${r.name}: expected "${r.to ?? "unbound"}", device has "${r.from ?? "unbound"}"`, "e");
+      if (left.length > 12) log(`   ... and ${left.length - 12} more`, "e");
+      log("The device accepted the writes without error but did not store them. " +
+          "Please report this with the log — it means this variant differs from the one tested.", "e");
+    }
   } catch (err) {
     log("Write failed: " + err.message, "e");
   } finally {
