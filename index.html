@@ -537,7 +537,7 @@ const LED_MODE_CODE = { off:0, backlight:1, shock:2, shock2:3, press:4 };
 const DEVICE_VARIANTS = [
   [0, 0], [2, 0], [3, 1], [4, 0], [4, 1],
   [5, 0], [6, 0], [6, 1], [6, 2], [9, 2],
-  [9, 3], [11, 3], [12, 2], [12, 3], [15, 3],
+  [9, 3], [11, 3], [12, 2], [12, 3], [12, 4], [15, 3],
 ];
 
 const KNOB_ACTIONS = ["ccw", "press", "cw"];
@@ -547,8 +547,41 @@ const KNOB_GLYPH   = { ccw:"↺", press:"●", cw:"↻" };
    Knob 0 is the physically LEFT knob and knob 1 the right — verified on
    hardware, and not something you can infer from a config where both are
    bound to volume. Actions run ccw, press, cw. */
-const keySlot  = i => i + 1;
-const knobSlot = (k, a) => 16 + 3 * k + a;
+const keySlot = i => i + 1;
+
+// SikaiCase 1189:8842 verified physical encoder slot map.
+// Each row is [CCW, PRESS, CW]. Knob 4 is stored in 0x0D-0x0F,
+// while Knobs 1-3 use 0x10-0x18.
+const SIKAI_1189_8842_KNOB_SLOTS = [
+  [0x10, 0x11, 0x12], // Knob 1
+  [0x13, 0x14, 0x15], // Knob 2
+  [0x16, 0x17, 0x18], // Knob 3
+  [0x0D, 0x0E, 0x0F], // Knob 4
+];
+
+function isSikai1189_8842() {
+  return layout.keys === 12 && layout.knobs === 4;
+}
+
+function knobSlot(k, a) {
+  if (isSikai1189_8842()) return SIKAI_1189_8842_KNOB_SLOTS[k][a];
+  return 16 + 3 * k + a;
+}
+
+function knobInfoForSlot(slot) {
+  if (isSikai1189_8842()) {
+    for (let k = 0; k < SIKAI_1189_8842_KNOB_SLOTS.length; k++) {
+      const a = SIKAI_1189_8842_KNOB_SLOTS[k].indexOf(slot);
+      if (a >= 0) return { knob: k + 1, action: KNOB_ACTIONS[a] };
+    }
+  }
+  // Generic mapping for the other supported layouts.
+  if (slot >= 16) {
+    const n = slot - 16;
+    return { knob: Math.floor(n / 3) + 1, action: KNOB_ACTIONS[n % 3] };
+  }
+  return null;
+}
 
 /* ------------------------------------------------------------------
    Physical arrangement.
@@ -587,6 +620,7 @@ const LAYOUTS = [
   { keys:  9, knobs: 3, cols: 3, rows: 3 },
   { keys: 11, knobs: 3, cols: 4, rows: 3 },
   { keys: 12, knobs: 2, cols: 3, rows: 4 },   // verified on hardware
+  { keys: 12, knobs: 4, cols: 3, rows: 4 },   // SikaiCase 1189:8842
   { keys: 12, knobs: 3, cols: 4, rows: 3 },
   { keys: 15, knobs: 3, cols: 5, rows: 3 },
 ];
@@ -905,7 +939,10 @@ function diffProfiles(fromDev, toEdit, forLayout) {
         layer: l, slot,
         name: pos.has(slot)
           ? `L${l + 1} key ${pos.get(slot)}`
-          : `L${l + 1} knob ${Math.floor((slot - 16) / 3) + 1} ${KNOB_ACTIONS[(slot - 16) % 3]}`,
+          : (() => {
+              const ki = knobInfoForSlot(slot);
+              return `L${l + 1} knob ${ki ? ki.knob : "?"} ${ki ? ki.action : "?"}`;
+            })(),
         from, to,
         kind: !a ? "add" : !b ? "del" : "chg",
       });
@@ -1235,6 +1272,17 @@ async function detect() {
   return { keys, knobs };
 }
 
+/**
+ * Build the 0xFA read command. SikaiCase 1189:8842 is unusual: although
+ * identify reports 12 keys + 4 knobs, its read command uses 0x0F, 0x03.
+ * This exact command was verified against the physical unit and returns
+ * all 24 stored records. Other layouts keep the normal [keys, knobs] form.
+ */
+function readProfileCommand(keys, knobs, layerNumber) {
+  if (keys === 12 && knobs === 4) return [0xFA, 0x0F, 0x03, layerNumber];
+  return [0xFA, keys, knobs, layerNumber];
+}
+
 /** Pull every stored record off the device and return it as a profile. */
 async function readDeviceProfile(keys, knobs, verbose) {
   const want = keys + 3 * knobs;
@@ -1243,13 +1291,13 @@ async function readDeviceProfile(keys, knobs, verbose) {
     if (verbose) log(`0xFA — reading layer ${l + 1} (read only).`, "w");
     const got = (await Promise.all([
       collect(want, 2500),
-      send(msg([0xFA, keys, knobs, l + 1])),
+      send(msg(readProfileCommand(keys, knobs, l + 1))),
     ]))[0];
     for (const d of got) {
       // Layer 3 comes back out of order on this hardware, so trust the slot
       // byte in the reply rather than the arrival order.
       const slot = d[1];
-      if (!slot || slot > 21) continue;
+      if (!slot || slot > 24) continue;
       const b = decodeRecord(d);
       if (b) next.layers[l].bindings[slot] = b;
     }
