@@ -302,11 +302,11 @@ dialog h3{font-family:var(--disp);font-size:1.05rem;margin:0;letter-spacing:-.01
       <header>
         <h2>Layout &mdash; <span id="layoutName">12 keys &middot; 2 knobs</span></h2>
         <div style="display:flex;gap:.6rem;align-items:center;flex-wrap:wrap">
-          <select id="layoutPick" title="Keypad model" style="width:auto"></select>
+          <select id="layoutPick" title="How many keys and knobs your keypad has" style="width:auto"></select>
           <span id="formatWrap" class="hidden" style="display:inline-flex;gap:.4rem;align-items:center">
             <select id="formatPick" title="Which command format to send" style="width:auto"></select>
           </span>
-          <select id="orientPick" title="How your keypad is physically placed" style="width:auto"></select>
+          <select id="orientPick" title="Rotate the on-screen grid to match your keypad" style="width:auto"></select>
           <div class="tabs" id="layerTabs" role="tablist"></div>
         </div>
       </header>
@@ -1684,7 +1684,8 @@ function renderOrientPick() {
   const el = $("orientPick");
   el.textContent = "";
   for (const o of ORIENTATIONS) {
-    const opt = new Option(o.label, o.id);
+    const opt = new Option(`Orientation: ${o.label.toLowerCase()}`, o.id);
+    opt.title = "How your keypad is physically placed — rotates the on-screen grid";
     if ((layout.orientation || "normal") === o.id) opt.selected = true;
     el.append(opt);
   }
@@ -1696,14 +1697,15 @@ function renderLayoutPick() {
   let matched = false;
   for (const l of LAYOUTS) {
     const label = l.keys
-      ? `${l.keys} keys, ${l.knobs} knob${l.knobs === 1 ? "" : "s"} — ${l.cols}\u00d7${l.rows}`
-      : `${l.knobs} knob${l.knobs === 1 ? "" : "s"} only`;
+      ? `Model: ${l.keys} keys, ${l.knobs} knob${l.knobs === 1 ? "" : "s"} — ${l.cols}\u00d7${l.rows}`
+      : `Model: ${l.knobs} knob${l.knobs === 1 ? "" : "s"} only`;
     const o = new Option(label, `${l.keys}/${l.knobs}`);
+    o.title = "How many keys and knobs your keypad has, and how they are arranged";
     if (l.keys === layout.keys && l.knobs === layout.knobs) { o.selected = true; matched = true; }
     sel2.append(o);
   }
   if (!matched) {
-    const o = new Option(`${layout.keys} keys, ${layout.knobs} knobs — not a known model`, "custom");
+    const o = new Option(`Model: ${layout.keys} keys, ${layout.knobs} knobs — not a known model`, "custom");
     o.selected = true;
     sel2.append(o);
   }
