@@ -1257,10 +1257,11 @@ async function connect(broad) {
           `github.com/jvspier/macropad-rebind/issues (format id: ${dialect})`, "w");
     }
 
+    let found = null;      // needed again below, so not block-scoped
     if (caps.read) {
       $("btnRead").disabled = false;
       $("btnDetect").disabled = false;
-      const found = await detect();
+      found = await detect();
       verified = !!found && found.keys <= caps.maxKeys && found.knobs <= 4
                  && (found.keys + found.knobs) > 0;
     } else {
@@ -1273,7 +1274,7 @@ async function connect(broad) {
       // record shape and 0xFC — neither of which is known for other dialects.
       $("btnBlank").disabled = !caps.tested;
       $("btnRepair").disabled = !caps.tested;
-      const known = findLayout(found.keys, found.knobs);
+      const known = found && findLayout(found.keys, found.knobs);
       if (known && (known.keys !== layout.keys || known.knobs !== layout.knobs)) {
         setLayout(known);
         log(`Layout adopted: ${known.keys} keys, ${known.knobs} knobs.`, "g");
