@@ -487,6 +487,10 @@ const dialectName = d => DIALECT_LABEL[d] || d;
 const DIALECT_CAPS = {
   "ch57x-1": { write: true, read: true,  led: true,  maxKeys: 15, knobBase: 16, maxSteps: 18, delay: true,  tested: true  },
   "ch57x-2": { write: true, read: false, led: false, maxKeys: 12, knobBase: 13, maxSteps: 5,  delay: false, tested: false },
+  // maxSteps is the limit for plain text. This format stores one entry per
+  // keycode *and* one per modifier, capped at CH3_MAX_ENTRIES, so a macro using
+  // modifiers runs out sooner. Pre-flight catches that and names the key, which
+  // is more useful than pretending a single number covers both cases.
   "ch57x-3": { write: true, read: false, led: false, maxKeys: 16, knobBase: 17, maxSteps: 18, delay: true,  tested: false },
 };
 
@@ -502,6 +506,8 @@ const TYPE_KEYBOARD = 1, TYPE_MEDIA = 2, TYPE_MOUSE = 3, TYPE_DELAY = 5;
 const LED_SLOT = 0xB0;
 
 const N_LAYERS = 3;
+// Most knobs any of these models carries. Each knob owns three slots.
+const MAX_KNOBS = 3;
 // Steps per key. Measured on hardware: the firmware keeps at most 18
 // (modifier, keycode) pairs. Send more and the extra pairs are dropped, though
 // the count byte is stored verbatim — so the record ends up claiming a length it
@@ -651,11 +657,22 @@ const KNOB_GLYPH   = { ccw:"↺", press:"●", cw:"↻" };
    Knob 0 is the physically LEFT knob and knob 1 the right — verified on
    hardware, and not something you can infer from a config where both are
    bound to volume. Actions run ccw, press, cw. */
-const stepLimit = () => DIALECT_CAPS[dialect]?.maxSteps ?? MAX_STEPS;
-const delayOK   = () => DIALECT_CAPS[dialect]?.delay !== false;
+/* The dialect actually in force: the user's override when they have set one,
+   otherwise whatever the USB id said. Everything that depends on the wire
+   format must agree on this one answer. An encoder that honours the override
+   while the editor's limits ignore it is how you get a write that throws
+   halfway through, with some slots already changed on the device. */
+const effDialect = () => forcedDialect || dialect;
+const effCaps    = () => DIALECT_CAPS[effDialect()] || DIALECT_CAPS[IMPLEMENTED_DIALECT];
+
+const stepLimit = () => effCaps().maxSteps ?? MAX_STEPS;
+const delayOK   = () => effCaps().delay !== false;
 
 const keySlot  = i => i + 1;
-const knobSlot = (k, a, d) => (DIALECT_CAPS[d || dialect]?.knobBase ?? 16) + 3 * k + a;
+/* Where knob slots start. This moves with the dialect (13, 16 or 17), so no
+   caller may assume 16 — least of all one turning a slot back into a name. */
+const knobBase = d => DIALECT_CAPS[d || effDialect()]?.knobBase ?? 16;
+const knobSlot = (k, a, d) => knobBase(d) + 3 * k + a;
 
 /* ------------------------------------------------------------------
    Physical arrangement.
@@ -774,6 +791,8 @@ const STORE_KEY = "macropad-rebind.profile.v1";
 
 function blankProfile() {
   return {
+    // Which numbering the slot keys below are in; see alignKnobBase.
+    knobBase: 16,
     layers: Array.from({ length: N_LAYERS }, () => ({
       bindings: {},                        // slot id -> binding
       led: { mode: "backlight", color: 1 },
@@ -832,6 +851,42 @@ function saveProfile() {
   try { localStorage.setItem(STORE_KEY, JSON.stringify(profile)); } catch { /* private mode */ }
 }
 
+/* Bindings are stored by slot number, and a knob's slot number depends on the
+   dialect (base 13, 16 or 17). Saved work would otherwise be replayed at the
+   wrong slots on a different keypad: bind a knob on a base-13 pad, connect a
+   standard one, and those become key 13-15 bindings written to real keys. The
+   app's own "try the other command format" advice produced exactly that. So the
+   base is stamped into the saved profile and slots move when it changes. */
+function alignKnobBase() {
+  const to = knobBase();
+  const from = Number.isInteger(profile.knobBase) ? profile.knobBase : to;
+  profile.knobBase = to;
+  if (from === to) return 0;
+  let moved = 0, clashed = 0;
+  for (const l of profile.layers) {
+    const next = {};
+    for (const [k, b] of Object.entries(l.bindings).sort((x, y) => x[0] - y[0])) {
+      const slot = Number(k);
+      const dest = slot >= from ? slot - from + to : slot;
+      // Shrinking the base can aim a knob at a slot a key already holds. The
+      // key is the one the hardware will actually read, so it wins.
+      if (dest !== slot && next[dest] !== undefined) { clashed++; continue; }
+      if (dest !== slot) moved++;
+      next[dest] = b;
+    }
+    l.bindings = next;
+  }
+  if (moved || clashed) {
+    log(`This keypad numbers knob slots from ${to}, the last one from ${from} — ` +
+        `moved ${moved} knob binding(s) to match.`, "w");
+    if (clashed) log(`${clashed} could not be moved because a key already uses that ` +
+                     `slot; check your knob bindings.`, "w");
+    sel = null;
+    saveProfile();
+  }
+  return moved;
+}
+
 const curLayer  = () => profile.layers[layer];
 const bindingFor = slot => curLayer().bindings[slot] || null;
 
@@ -873,7 +928,7 @@ function msg(bytes) {
 
 /** All reports needed to program one slot. */
 function bindingReports(slot, b) {
-  const d = forcedDialect || dialect;
+  const d = effDialect();
   if (d === "ch57x-2") return ch2Reports(slot, b, layer);
   if (d === "ch57x-3") return ch3Reports(slot, b, layer);
 
@@ -1160,7 +1215,18 @@ function textToSteps(text) {
     if (e) steps.push({ mods: e.mods, code: e.code });
     else if (!skipped.includes(ch)) skipped.push(ch);
   }
-  return { steps, skipped, truncated: Math.max(0, steps.length - MAX_STEPS) };
+  return { steps, skipped, truncated: Math.max(0, steps.length - stepLimit()) };
+}
+
+/** Human name for a slot: a key by its position in the grid, or a knob action.
+    The knob base moves with the dialect, so this cannot hardcode 16 — doing so
+    turned a base-13 knob slot into "knob 0 undefined" via a negative modulo. */
+function slotName(slot, pos) {
+  if (pos.has(slot)) return `key ${pos.get(slot)}`;
+  const base = knobBase();
+  const k = Math.floor((slot - base) / 3), a = ((slot - base) % 3 + 3) % 3;
+  if (slot >= base && k < MAX_KNOBS) return `knob ${k + 1} ${KNOB_ACTIONS[a]}`;
+  return `slot ${slot}`;
 }
 
 /** Compare the editor against a profile read from the device. */
@@ -1180,9 +1246,7 @@ function diffProfiles(fromDev, toEdit, forLayout) {
       if (from === to) continue;
       rows.push({
         layer: l, slot,
-        name: pos.has(slot)
-          ? `L${l + 1} key ${pos.get(slot)}`
-          : `L${l + 1} knob ${Math.floor((slot - 16) / 3) + 1} ${KNOB_ACTIONS[(slot - 16) % 3]}`,
+        name: `L${l + 1} ${slotName(slot, pos)}`,
         from, to,
         kind: !a ? "add" : !b ? "del" : "chg",
       });
@@ -1250,30 +1314,19 @@ async function connect(broad) {
     if (!VENDOR_IDS.includes(device.vendorId))
       log(`Vendor ${device.vendorId.toString(16)} is not one this tool knows — ` +
           `please report it so it can be added.`, "w");
-    $("btnDetect").disabled = false;
-    $("btnRead").disabled = false;
+    // Reading is enabled below, once the dialect is known — a dialect with no
+    // read command spends 7.5s in timeouts and then replaces the editor with
+    // nothing, so the button must not be live before that is settled.
 
-    // Positively identify the protocol before enabling anything that writes.
-    // The picker filter is a convenience, not a guarantee — plenty of unrelated
-    // hardware exposes a vendor HID collection on this usage page, and writing
-    // to one of those could misconfigure it. Answering 0xFB with a plausible
-    // layout is proof the device actually speaks this protocol.
-    // Before anything else: is this a dialect we can actually speak? Getting
-    // this wrong is silent — the device accepts well-formed messages in the
-    // wrong language and stores nothing useful.
+    // Which dialect does this one speak? Getting it wrong is silent: the
+    // device accepts well-formed messages in the wrong language and stores
+    // nothing useful. Every dialect in MODELS has an entry in DIALECT_CAPS
+    // (a test enforces it), so effCaps() always has something to return.
     const model = modelFor(device.vendorId, device.productId);
     dialect = model ? model.dialect : IMPLEMENTED_DIALECT;
-    const caps = DIALECT_CAPS[dialect];
-
-    if (!caps) {
-      log(`This keypad speaks a command format this tool does not know how to ` +
-          `write (id: ${dialect}).`, "e");
-      log(`Writing is disabled — sending the wrong format would look like it worked ` +
-          `and change nothing. Please open an issue; a report is all it takes to add it.`, "w");
-      renderAll();
-      navigator.hid.addEventListener("disconnect", e => { if (e.device === device) disconnected(); });
-      return;
-    }
+    const caps = effCaps();
+    // Knob slots may be numbered differently here than on the last keypad.
+    alignKnobBase();
 
     if (dialect !== IMPLEMENTED_DIALECT) {
       formatHintShown = true;
@@ -1289,12 +1342,19 @@ async function connect(broad) {
           `github.com/jvspier/macropad-rebind/issues (format id: ${dialect})`, "w");
     }
 
+    $("btnRead").disabled = !caps.read;
+    $("btnDetect").disabled = !caps.read;
+
+    // Positively identify the device before enabling anything that writes. The
+    // picker filter is a convenience, not a guarantee — plenty of unrelated
+    // hardware exposes a vendor HID collection on this usage page, and writing
+    // to one of those could misconfigure it. Answering 0xFB with a plausible
+    // layout is proof it really does speak this protocol.
+
     let found = null;      // needed again below, so not block-scoped
     if (caps.read) {
-      $("btnRead").disabled = false;
-      $("btnDetect").disabled = false;
       found = await detect();
-      verified = !!found && found.keys <= caps.maxKeys && found.knobs <= 4
+      verified = !!found && found.keys <= caps.maxKeys && found.knobs <= MAX_KNOBS
                  && (found.keys + found.knobs) > 0;
     } else {
       // Nothing to ask, so nothing to verify. Trust the user's model choice.
@@ -1331,6 +1391,11 @@ async function connect(broad) {
 function disconnected() {
   device = null;
   dialect = IMPLEMENTED_DIALECT;
+  // The override belongs to the keypad it was chosen for. The selector hides
+  // itself when nothing is connected, so a leftover override would be applied
+  // to the next keypad with no way to see that it was set.
+  forcedDialect = null;
+  formatHintShown = false;
   verified = false;
   setStatus("disconnected");
   $("btnWrite").disabled = true;
@@ -1373,6 +1438,9 @@ async function send(report, label) {
 function confirmDiff(rows, untouched) {
   return new Promise(resolve => {
     const dlg = $("diffDlg"), body = $("diffBody");
+    // writeAll filters "del" rows out before calling: a slot the editor has no
+    // binding for is left alone, not cleared. The seed keeps the tally honest
+    // rather than NaN should another caller ever pass one.
     const counts = rows.reduce((a, r) => (a[r.kind]++, a), { add: 0, del: 0, chg: 0 });
     $("diffSum").textContent =
       `${counts.add} added · ${counts.chg} changed` +
@@ -1423,6 +1491,23 @@ function confirmDiff(rows, untouched) {
   });
 }
 
+/** Encode every binding in the editor and return the ones that will not fit.
+    Cheap, and it turns a half-finished write into a message. */
+function preflight() {
+  const problems = [], pos = posOfSlot(layout), saved = layer;
+  try {
+    for (let l = 0; l < N_LAYERS; l++) {
+      layer = l;
+      for (const [slot, b] of Object.entries(profile.layers[l].bindings)) {
+        if (!b) continue;
+        try { bindingReports(Number(slot), b); }
+        catch (e) { problems.push(`L${l + 1} ${slotName(Number(slot), pos)}: ${e.message}`); }
+      }
+    }
+  } finally { layer = saved; }
+  return problems;
+}
+
 async function writeAll() {
   if (!device) return;
   const btn = $("btnWrite");
@@ -1430,8 +1515,21 @@ async function writeAll() {
   try {
     // Look before you leap: read what is actually on the device and show
     // exactly what this write would change.
+    // Encode everything first. The encoders reject bindings that do not fit
+    // the format, and they used to do it from inside the write loop — which
+    // left the earlier slots already changed on the device and named neither
+    // the key nor the layer that stopped it.
+    const bad = preflight();
+    if (bad.length) {
+      log(`Nothing was sent. ${bad.length} binding(s) do not fit this keypad's ` +
+          `command format:`, "e");
+      for (const b of bad.slice(0, 8)) log(`   ${b}`, "e");
+      if (bad.length > 8) log(`   ... and ${bad.length - 8} more`, "e");
+      log(`Shorten them, or check the command format is right for your keypad.`, "w");
+      return;
+    }
     log("Reading current config so the changes can be shown first.", "w");
-    if (!DIALECT_CAPS[dialect]?.read) {
+    if (!effCaps().read) {
       const n = profile.layers.reduce((a, l) => a + Object.values(l.bindings).filter(Boolean).length, 0);
       if (!n) { log("Nothing in the editor to write.", "w"); return; }
       if (!confirm(`Write ${n} binding(s)?\n\nThis device cannot be read back, so ` +
@@ -1465,7 +1563,7 @@ async function writeAll() {
         for (const r of bindingReports(Number(slot), b)) await send(r);
         slots++;
       }
-      if (DIALECT_CAPS[dialect]?.led)
+      if (effCaps().led)
         for (const r of ledReports(l, lay.led)) await send(r);
     }
     layer = saved;
@@ -1474,7 +1572,7 @@ async function writeAll() {
     // Read it straight back. "The write returned no error" is not the same as
     // "the device stored it", and on unfamiliar variants that gap is exactly
     // where the surprises live.
-    if (!DIALECT_CAPS[dialect]?.read) {
+    if (!effCaps().read) {
       formatHintShown = true;
       log("This keypad cannot be read back, so the write cannot be checked. Try your " +
           "keys. If nothing happens, use the command-format dropdown next to the " +
@@ -1615,7 +1713,10 @@ async function readDeviceProfile(keys, knobs, verbose) {
       // Layer 3 comes back out of order on this hardware, so trust the slot
       // byte in the reply rather than the arrival order.
       const slot = d[1];
-      if (!slot || slot > 21) continue;
+      // A three-knob pad reaches slot 24 (base 16 + 3 knobs). The old ceiling
+      // of 21 silently dropped knob 3 on read, and the write verification then
+      // reported those bindings as missing on every single write.
+      if (!slot || slot > knobBase() + 3 * MAX_KNOBS - 1) continue;
       const b = decodeRecord(d);
       if (b) next.layers[l].bindings[slot] = b;
     }
@@ -1690,8 +1791,8 @@ function renderFormatPick() {
     el.append(opt);
   }
   // Only worth showing once it might actually be needed.
-  const caps = DIALECT_CAPS[forcedDialect || dialect];
-  const show = !!device && (forcedDialect || caps?.tested === false || formatHintShown);
+  const caps = effCaps();
+  const show = !!device && (forcedDialect || caps.tested === false || formatHintShown);
   $("formatWrap").classList.toggle("hidden", !show);
 
   // Explain it in terms of the one identifier a person can actually look up:
@@ -1728,7 +1829,13 @@ function renderLayoutPick() {
   const sel2 = $("layoutPick");
   sel2.textContent = "";
   let matched = false;
-  for (const l of LAYOUTS) {
+  // A layout with more keys than the dialect allows is not merely wrong, it is
+  // ambiguous: on a standard pad keySlot(15) and knobSlot(0, "ccw") are both
+  // slot 16, so a 16-key choice makes one binding appear in two places and each
+  // edit overwrite the other. maxKeys is always below the knob base, so this
+  // filter is exactly the no-collision condition.
+  const fits = LAYOUTS.filter(l => l.keys <= effCaps().maxKeys);
+  for (const l of fits) {
     const label = l.keys
       ? `Model: ${l.keys} keys, ${l.knobs} knob${l.knobs === 1 ? "" : "s"} — ${l.cols}\u00d7${l.rows}`
       : `Model: ${l.knobs} knob${l.knobs === 1 ? "" : "s"} only`;
@@ -1949,11 +2056,26 @@ function renderEditor() {
   if (type === "media") renderMediaEditor(host, b);
   if (type === "mouse") renderMouseEditor(host, b);
 
-  const first = bindingReports(sel.slot, b)[0];
-  if (first) {
+  // The encoders throw when a binding cannot be expressed in the current
+  // format — too many steps, or a delay the device has no record for. That
+  // must not take the editor with it: unhandled, the exception escapes
+  // renderEditor -> renderAll and even connect(), which then reports a
+  // perfectly healthy keypad as "Connect failed: too long for this device".
+  // Showing the reason where the user can see it is the whole point.
+  let first = null, encErr = null;
+  try { first = bindingReports(sel.slot, b)[0]; }
+  catch (e) { encErr = e.message; }
+  if (encErr || first) {
     const preview = document.createElement("p");
     preview.className = "hint";
-    preview.innerHTML = `Sends <code>03 ${hex(first.subarray(0, 16))}</code>`;
+    if (encErr) {
+      const lead = document.createElement("b");
+      lead.textContent = "This will not fit your keypad: ";
+      preview.append(lead, document.createTextNode(
+        `${encErr}. It stays in the editor, but the write stops until you shorten it.`));
+    } else {
+      preview.innerHTML = `Sends <code>03 ${hex(first.subarray(0, 16))}</code>`;
+    }
     host.append(preview);
   }
 }
@@ -1989,7 +2111,7 @@ function renderKeyEditor(host, b) {
     const { steps, skipped, truncated } = textToSteps(txt.value);
     if (!steps.length) { log("Nothing in that text could be typed.", "w"); return; }
     const room = stepLimit() - b.steps.length;
-    if (room <= 0) { log(`Sequence is already full (${MAX_STEPS} steps).`, "w"); return; }
+    if (room <= 0) { log(`Sequence is already full (${stepLimit()} steps).`, "w"); return; }
     touch(b);
     b.steps.push(...steps.slice(0, room));
     if (skipped.length) log(`Skipped ${skipped.length} character(s) with no US-layout key: ${skipped.join(" ")}`, "w");
@@ -2285,7 +2407,7 @@ $("btnApplyLed").onclick = applyLed;
 $("btnRepair").onclick = repairIdentity;
 $("formatPick").onchange = e => {
   forcedDialect = e.target.value || null;
-  const eff = forcedDialect || dialect;
+  const eff = effDialect();
   log(forcedDialect
     ? `Now sending the "${dialectName(forcedDialect)}" command format (${forcedDialect}). ` +
       `Write again and try your keys.`
@@ -2293,6 +2415,8 @@ $("formatPick").onchange = e => {
   const caps = DIALECT_CAPS[eff];
   if (caps && !caps.tested)
     log(`This format has never been tested on real hardware — writing is at your own risk.`, "w");
+  // Formats disagree about where knob slots begin, so the editor's slots move.
+  alignKnobBase();
   renderAll();
 };
 $("orientPick").onchange = e => {

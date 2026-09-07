@@ -428,7 +428,15 @@ console.log("\nprotocol dialects");
 
   eq("we implement ch57x-1", IMPLEMENTED_DIALECT, "ch57x-1");
   const other = MODELS.filter(m => m.dialect !== IMPLEMENTED_DIALECT);
-  eq("  2 models need a dialect we do not have", other.length, 2);
+  eq("  2 models speak a format other than the tested one", other.length, 2);
+  // Every dialect a model claims must have capabilities, or effCaps() silently
+  // falls back to the tested one and we would write the wrong format.
+  for (const m of MODELS)
+    eq(`  ${m.dialect} has capabilities`, !!DIALECT_CAPS[m.dialect], true);
+  // No dialect may let a key slot reach the first knob slot: keySlot(n) is n,
+  // so maxKeys must stay below knobBase or one binding lands in two places.
+  for (const [id, c] of Object.entries(DIALECT_CAPS))
+    eq(`  ${id}: keys stop below the knob base`, c.maxKeys < c.knobBase, true);
   eq("1189:8851 (from the 2025 vendor build)", modelFor(0x1189, 0x8851).dialect, "ch57x-1");
   eq("  7 models total", MODELS.length, 7);
   // Every model's vendor must be one the picker will offer, or it is unreachable.
@@ -579,7 +587,7 @@ console.log("\nch57x-2 encoder (1189:8890) — ported, NOT hardware-verified");
   check("  ctrl-a",                    r[2], [0x03, 0x01, 0x11, 0x01, 0x01, 0x01, 0x04]);
   check("  finish is AA AA only",      r[3], [0x03, 0xaa, 0xaa]);
 
-  // Layer 3 must land in the high nibble: (3+1) << 4 | 1 = 0x41.
+  // Layer 3 lands in the high nibble alongside the type: 3 << 4 | 1 = 0x31.
   r = ch2Reports(1, { type: "key", steps: [{ mods: 0, code: 0x04 }], delay: 0 }, 2);
   eq("layer 3 encodes as 0x31", r[2][1], 0x31);
   eq("  preamble carries layer 3", r[0][1], 0x03);
