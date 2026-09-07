@@ -366,6 +366,13 @@ This project owes a great deal to
   the same four options.
 - **Sending an all-zero report on connect**, which it does before anything else.
 
+And separately, [PollRobots/ch57x-programmer](https://github.com/PollRobots/ch57x-programmer)
+(MIT) — another browser-based tool for this hardware, also derived from
+ch57x-keyboard-tool. No code is taken from it, but comparing against it
+**independently confirmed** this project's read and write paths for ch57x-1, byte
+for byte. It is also a third implementation whose LED model has no per-key colour.
+Worth a look if you prefer its interface.
+
 If you would rather have a command-line tool driven by a YAML file, use that one —
 it is excellent, and it supports keyboards this page does not.
 

@@ -201,6 +201,13 @@ Per slot: the record, then optionally a delay record, then `AA AA`, `FD FE FF`,
 
 ## Reading
 
+> **Independently confirmed.** [PollRobots/ch57x-programmer](https://github.com/PollRobots/ch57x-programmer)
+> (MIT), a separate browser-based tool, arrives at byte-identical read buffers —
+> `[0xFB, 0xFB, 0xFB]` and `[0xFA, buttons, encoders, layer]` — and parses replies
+> with slot at `[1]`, layer at `[2] - 1` and type at `[3]`. Its ch57x-1 write path
+> matches this document too, header for header. Two independent reconstructions
+> agreeing is worth more than either alone.
+
 `0xFB` — send `FB FB FB`. The reply carries the key count and knob count. It
 doubles as a cheap identity check: a device that answers with a plausible layout
 speaks this protocol, whatever its vendor id claims. Worth doing before any write,
@@ -299,6 +306,12 @@ the LED record.
 
     03 FE B0 <layer+1> 08 00 00 00 00 00 01 00 <code>
     03 FD FE FF
+
+One unresolved divergence: PollRobots/ch57x-programmer terminates the LED write
+with `FD F0 FF` rather than `FD FE FF`, while using `FD FE FF` for key bindings
+as here. Both appear to work — `FD FE FF` is what this project sends, and
+lighting changes do take effect on a `1189:8842` — but if you meet lighting that
+will not update, `F0` is the first thing to try.
 
 Colours 1–7 are red, orange, yellow, green, cyan, blue, purple. The LEDs are
 genuinely RGB. All six modes observed on hardware:
