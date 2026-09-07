@@ -189,6 +189,11 @@ nothing tells you why.
    the configuration interface is offered; the keyboard part of the device is
    deliberately invisible to the browser.
 
+   If the on-screen grid does not match your hardware, use the **orientation**
+   dropdown beside the model picker — normal, upside down, or rotated either way.
+   Only one model's grid has been confirmed against a real unit, so this is the
+   quickest fix if yours looks wrong.
+
    On connecting, the tool asks the device to identify itself (`0xFB`) and only
    enables the controls that write once it gets a sensible answer. The picker
    filter is a convenience, not a guarantee — other hardware exposes a vendor HID
@@ -344,11 +349,25 @@ working keypad look broken if you send it blind.
 
 ## Credits
 
-Write-side byte layout cross-checked against
+This project owes a great deal to
 [kriomant/ch57x-keyboard-tool](https://github.com/kriomant/ch57x-keyboard-tool)
-(MIT, © 2023 Mikhail Trishchenkov), whose unit tests carry vectors verified
-against real USB captures — this project's tests assert against them. If you
-would rather have a command-line tool driven by a YAML file, use that one.
+(MIT, © 2023 Mikhail Trishchenkov). Specifically taken from it:
+
+- **The ch57x-1 byte layout**, cross-checked against its unit-test vectors, which
+  were themselves verified against real USB captures. This project's tests assert
+  against those same vectors.
+- **The ch57x-3 dialect** (`514c:8850`), ported from its `k8850_4x4.rs`. Untested
+  here; that implementation is the only public description of the protocol.
+- **The vendor/product to dialect mapping**, from its `SUPPORTED_DEVICES` table —
+  including the detail that `1189:8850` and `514c:8850` differ despite sharing a
+  product id.
+- **The orientation idea.** Its config lets you declare how the pad is placed;
+  that is the generic fix for not knowing a model's grid, and this tool now has
+  the same four options.
+- **Sending an all-zero report on connect**, which it does before anything else.
+
+If you would rather have a command-line tool driven by a YAML file, use that one —
+it is excellent, and it supports keyboards this page does not.
 
 ## Licence
 

@@ -303,6 +303,7 @@ dialog h3{font-family:var(--disp);font-size:1.05rem;margin:0;letter-spacing:-.01
         <h2>Layout &mdash; <span id="layoutName">12 keys &middot; 2 knobs</span></h2>
         <div style="display:flex;gap:.6rem;align-items:center;flex-wrap:wrap">
           <select id="layoutPick" title="Keypad model" style="width:auto"></select>
+          <select id="orientPick" title="How your keypad is physically placed" style="width:auto"></select>
           <div class="tabs" id="layerTabs" role="tablist"></div>
         </div>
       </header>
@@ -641,15 +642,57 @@ function findLayout(keys, knobs) {
   return LAYOUTS.find(l => l.keys === keys && l.knobs === knobs) || null;
 }
 
+/* ------------------------------------------------------------------
+   Orientation.
+
+   Idea taken from ch57x-keyboard-tool, which lets a config declare how
+   the pad is physically placed. It is the generic answer to a problem
+   that bit this project twice: rather than needing a verified grid for
+   every model, the user rotates or flips the on-screen layout until it
+   matches the hardware in front of them.
+
+   The slot formula stays the hardware truth. Orientation only maps a
+   display cell to a hardware cell.
+   ------------------------------------------------------------------ */
+const ORIENTATIONS = [
+  { id: "normal",            label: "Normal" },
+  { id: "upside-down",       label: "Upside down" },
+  { id: "clockwise",         label: "Rotated 90° clockwise" },
+  { id: "counter-clockwise", label: "Rotated 90° anticlockwise" },
+];
+const isRotated = o => o === "clockwise" || o === "counter-clockwise";
+
+/** Display grid dimensions, which swap under a 90° rotation. */
+function displayGrid(l) {
+  const rot = isRotated(l.orientation);
+  return { rows: rot ? l.cols : l.rows, cols: rot ? l.rows : l.cols };
+}
+
 /** DOM order (left to right, top to bottom) -> slot id. 0 means no key. */
 function gridOrder(l) {
+  const o = l.orientation || "normal";
+  const { rows: dR, cols: dC } = displayGrid(l);
   const order = [];
-  for (let r = 0; r < l.rows; r++)
-    for (let c = 0; c < l.cols; c++) {
-      const slot = c * l.rows + (l.rows - r);
-      order.push(slot <= l.keys ? slot : 0);
+  for (let dr = 0; dr < dR; dr++)
+    for (let dc = 0; dc < dC; dc++) {
+      let hr, hc;
+      switch (o) {
+        case "upside-down":       hr = l.rows - 1 - dr; hc = l.cols - 1 - dc; break;
+        case "clockwise":         hr = l.rows - 1 - dc; hc = dr;              break;
+        case "counter-clockwise": hr = dc;              hc = l.cols - 1 - dr; break;
+        default:                  hr = dr;              hc = dc;
+      }
+      const slot = hc * l.rows + (l.rows - hr);
+      order.push(slot >= 1 && slot <= l.keys ? slot : 0);
     }
   return order;
+}
+
+/** Knob display order. A flip or a clockwise turn reverses it. */
+function knobOrder(l) {
+  const idx = [...Array(l.knobs).keys()];
+  const o = l.orientation || "normal";
+  return (o === "upside-down" || o === "clockwise") ? idx.reverse() : idx;
 }
 
 /** The UI speaks positions; the wire speaks slots. */
@@ -710,7 +753,13 @@ function loadLayout() {
 function saveLayout() {
   try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout)); } catch { /* private mode */ }
 }
-function setLayout(l) { layout = { ...l }; saveLayout(); }
+function setLayout(l) {
+  // Orientation is a property of how the user has placed their pad, not of the
+  // model, so it survives a model change.
+  layout = { orientation: layout?.orientation || "normal", ...l };
+  saveLayout();
+}
+function setOrientation(o) { layout = { ...layout, orientation: o }; saveLayout(); }
 
 function saveProfile() {
   try { localStorage.setItem(STORE_KEY, JSON.stringify(profile)); } catch { /* private mode */ }
@@ -1064,6 +1113,10 @@ async function connect(broad) {
     device = list[0];
     if (!device.opened) await device.open();
     device.addEventListener("inputreport", onInput);
+    // ch57x-keyboard-tool sends an all-zero report right after claiming the
+    // interface, before anything else. Harmless (0x00 is not a command) and
+    // apparently needed by some units, so do the same.
+    try { await device.sendReport(REPORT_ID, new Uint8Array(REPORT_LEN)); } catch { /* not fatal */ }
     setStatus("connected", "on");
     log(`Opened ${device.productName || "keypad"} — ` +
         `${(device.vendorId || 0).toString(16).padStart(4,"0")}:` +
@@ -1482,6 +1535,16 @@ async function readAll() {
 /* ==================================================================
    Rendering — device
    ================================================================== */
+function renderOrientPick() {
+  const el = $("orientPick");
+  el.textContent = "";
+  for (const o of ORIENTATIONS) {
+    const opt = new Option(o.label, o.id);
+    if ((layout.orientation || "normal") === o.id) opt.selected = true;
+    el.append(opt);
+  }
+}
+
 function renderLayoutPick() {
   const sel2 = $("layoutPick");
   sel2.textContent = "";
@@ -1519,8 +1582,9 @@ function renderTabs() {
 function renderGrid() {
   const g = $("grid");
   g.textContent = "";
-  g.style.gridTemplateColumns = `repeat(${Math.max(1, layout.cols)}, minmax(0, 1fr))`;
-  g.style.width = `min(100%, ${Math.max(1, layout.cols) * 112}px)`;
+  const dg = displayGrid(layout);
+  g.style.gridTemplateColumns = `repeat(${Math.max(1, dg.cols)}, minmax(0, 1fr))`;
+  g.style.width = `min(100%, ${Math.max(1, dg.cols) * 112}px)`;
   gridOrder(layout).forEach((slot, i) => {
     const pos = i + 1;
     if (!slot) { g.append(document.createElement("div")); return; }
@@ -1547,7 +1611,7 @@ function renderGrid() {
 function renderKnobs() {
   const wrap = $("knobs");
   wrap.textContent = "";
-  for (let k = 0; k < layout.knobs; k++) {
+  knobOrder(layout).forEach((k, kpos) => {
     const box = document.createElement("div");
     box.className = "knob";
 
@@ -1558,8 +1622,8 @@ function renderKnobs() {
     pb.type = "button";
     pb.textContent = KNOB_GLYPH.press;
     pb.className = (bindingFor(pressSlot) ? "bound" : "") + (sel?.slot === pressSlot ? " sel" : "");
-    pb.title = "Knob " + (k + 1) + " press — " + bindingLabel(bindingFor(pressSlot));
-    pb.onclick = () => select(pressSlot, `Knob ${k + 1} press`);
+    pb.title = `Knob ${kpos + 1} press — ` + bindingLabel(bindingFor(pressSlot));
+    pb.onclick = () => select(pressSlot, `Knob ${kpos + 1} press`);
     dial.append(pb);
 
     const rot = document.createElement("div");
@@ -1570,18 +1634,18 @@ function renderKnobs() {
       rb.type = "button";
       rb.textContent = KNOB_GLYPH[KNOB_ACTIONS[a]];
       rb.className = (bindingFor(slot) ? "bound" : "") + (sel?.slot === slot ? " sel" : "");
-      rb.title = `Knob ${k + 1} ${KNOB_ACTIONS[a]} — ` + bindingLabel(bindingFor(slot));
-      rb.onclick = () => select(slot, `Knob ${k + 1} ${KNOB_ACTIONS[a]}`);
+      rb.title = `Knob ${kpos + 1} ${KNOB_ACTIONS[a]} — ` + bindingLabel(bindingFor(slot));
+      rb.onclick = () => select(slot, `Knob ${kpos + 1} ${KNOB_ACTIONS[a]}`);
       rot.append(rb);
     }
 
     const lbl = document.createElement("span");
     lbl.className = "knob-label";
-    lbl.textContent = "Knob " + (k + 1);
+    lbl.textContent = "Knob " + (kpos + 1);
 
     box.append(dial, rot, lbl);
     wrap.append(box);
-  }
+  });
 }
 
 function renderLed() {
@@ -2009,7 +2073,8 @@ $("fileImport").onchange = async e => {
    Wire-up
    ================================================================== */
 function renderAll() {
-  renderLayoutPick(); renderTabs(); renderGrid(); renderKnobs(); renderLed(); renderEditor();
+  renderLayoutPick(); renderOrientPick(); renderTabs(); renderGrid();
+  renderKnobs(); renderLed(); renderEditor();
 }
 
 $("btnConnect").onclick = () => connect(false);
@@ -2022,6 +2087,13 @@ $("btnClearAll").onclick = clearEditor;
 $("btnBlank").onclick = blankKeypad;
 $("btnApplyLed").onclick = applyLed;
 $("btnRepair").onclick = repairIdentity;
+$("orientPick").onchange = e => {
+  setOrientation(e.target.value);
+  sel = null;
+  renderAll();
+  log(`Orientation set to ${e.target.value}. Bindings are unchanged — this only ` +
+      `changes how the keys are laid out on screen.`);
+};
 $("layoutPick").onchange = e => {
   const [k, n] = e.target.value.split("/").map(Number);
   const l = findLayout(k, n);

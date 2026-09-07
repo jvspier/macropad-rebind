@@ -22,13 +22,13 @@ const core = js.slice(
 
 const mod = await import(
   "data:text/javascript;base64," +
-  Buffer.from(core + "\nexport {bindingReports, ledReports, keySlot, knobSlot, decodeRecord, touch, emptyReports, variantReport, DEVICE_VARIANTS, textToSteps, diffProfiles, blankProfile, LAYOUTS, findLayout, gridOrder, posOfSlot, DEFAULT_LAYOUT, VENDOR_IDS, MODELS, modelFor, IMPLEMENTED_DIALECT, ch3Reports, DIALECT_CAPS};\n").toString("base64")
+  Buffer.from(core + "\nexport {bindingReports, ledReports, keySlot, knobSlot, decodeRecord, touch, emptyReports, variantReport, DEVICE_VARIANTS, textToSteps, diffProfiles, blankProfile, LAYOUTS, findLayout, gridOrder, posOfSlot, DEFAULT_LAYOUT, VENDOR_IDS, MODELS, modelFor, IMPLEMENTED_DIALECT, ch3Reports, DIALECT_CAPS, displayGrid, knobOrder, ORIENTATIONS};\n").toString("base64")
 );
 const { bindingReports, ledReports, keySlot, knobSlot, decodeRecord, touch,
         emptyReports, variantReport, DEVICE_VARIANTS, textToSteps, diffProfiles,
         blankProfile, LAYOUTS, findLayout, gridOrder, posOfSlot, DEFAULT_LAYOUT,
         VENDOR_IDS, MODELS, modelFor, IMPLEMENTED_DIALECT, ch3Reports,
-        DIALECT_CAPS } = mod;
+        DIALECT_CAPS, displayGrid, knobOrder, ORIENTATIONS } = mod;
 
 let pass = 0, fail = 0;
 const hx = a => Array.from(a, b => b.toString(16).padStart(2, "0")).join(" ");
@@ -497,6 +497,49 @@ console.log("\nch57x-3 encoder (514c:8850) — ported, NOT hardware-verified");
   eq("ch57x-3 has no read command", DIALECT_CAPS["ch57x-3"].read, false);
   eq("ch57x-3 is untested",         DIALECT_CAPS["ch57x-3"].tested, false);
   eq("ch57x-1 is tested",           DIALECT_CAPS["ch57x-1"].tested, true);
+}
+
+
+console.log("\norientation (idea from ch57x-keyboard-tool)");
+{
+  // The generic answer to 21 unverified grids: let the user rotate or flip the
+  // on-screen layout instead of needing a measured grid per model.
+  const base = findLayout(12, 2);
+  const at = o => gridOrder({ ...base, orientation: o });
+
+  eq("normal is the verified order", at("normal").join(","), "4,8,12,3,7,11,2,6,10,1,5,9");
+  // Upside down reverses the whole reading order.
+  eq("upside-down reverses it", at("upside-down").join(","),
+     at("normal").slice().reverse().join(","));
+  // A 90 degree turn swaps the display dimensions.
+  eq("normal display is 3 wide",  displayGrid({ ...base, orientation: "normal" }).cols, 3);
+  eq("rotated display is 4 wide", displayGrid({ ...base, orientation: "clockwise" }).cols, 4);
+  eq("rotated display is 3 tall", displayGrid({ ...base, orientation: "clockwise" }).rows, 3);
+
+  // Every orientation must still cover exactly the 12 real slots, once each.
+  for (const o of ORIENTATIONS.map(x => x.id)) {
+    const g = at(o).filter(Boolean);
+    eq(`${o} covers all 12 slots once`,
+       g.length === 12 && new Set(g).size === 12, true);
+  }
+  // And they must be four genuinely different arrangements.
+  eq("all four are distinct",
+     new Set(ORIENTATIONS.map(x => at(x.id).join(","))).size, 4);
+
+  // The clockwise view should match the vendor software's own drawing, which
+  // shows the pad turned 90 degrees with the knobs on the right.
+  eq("clockwise top row", at("clockwise").slice(0, 4).join(","), "1,2,3,4");
+
+  // Knob display order flips with the pad.
+  eq("normal knob order",       knobOrder({ ...base, orientation: "normal" }).join(","), "0,1");
+  eq("upside-down reverses",    knobOrder({ ...base, orientation: "upside-down" }).join(","), "1,0");
+  eq("clockwise reverses",      knobOrder({ ...base, orientation: "clockwise" }).join(","), "1,0");
+  eq("anticlockwise does not",  knobOrder({ ...base, orientation: "counter-clockwise" }).join(","), "0,1");
+
+  // An 11-key grid has a hole; it must stay a hole under every orientation.
+  for (const o of ORIENTATIONS.map(x => x.id))
+    eq(`11+3 keeps one hole when ${o}`,
+       gridOrder({ ...findLayout(11, 3), orientation: o }).filter(x => x === 0).length, 1);
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
