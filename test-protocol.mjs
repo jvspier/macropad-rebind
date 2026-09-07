@@ -374,5 +374,40 @@ console.log("\nvendor ids");
   eq("  all are 16-bit", VENDOR_IDS.every(v => v > 0 && v <= 0xffff), true);
 }
 
+
+console.log("\nwrite scope: an unloaded editor must not look like failure");
+{
+  // The bug this pins: a fresh editor holds one binding while the keypad holds
+  // dozens. Write correctly sends only the one and leaves the rest alone, so
+  // "device has a binding the editor lacks" is NOT a pending change and NOT a
+  // verification failure. Treating it as one told a user their hardware was
+  // broken when it was working perfectly.
+  const dev = blankProfile(), ed = blankProfile();
+  const L = findLayout(12, 2);
+  for (const slot of [1, 2, 3, 4, 5, 6]) dev.layers[0].bindings[slot] = { type: "media", media: 0xe9 };
+  ed.layers[0].bindings[7] = { type: "key", steps: [{ mods: 0, code: 0x04 }], delay: 0 };
+
+  const all = diffProfiles(dev, ed, L);
+  eq("raw diff sees every slot", all.length, 7);
+  const writes = all.filter(r => r.kind !== "del");
+  eq("  but only 1 is actually a write", writes.length, 1);
+  eq("  and it is the new binding", writes[0].kind, "add");
+  eq("  6 slots are left untouched", all.length - writes.length, 6);
+
+  // After that write the device holds all 7. Verification must be silent.
+  const after = blankProfile();
+  for (const slot of [1, 2, 3, 4, 5, 6]) after.layers[0].bindings[slot] = { type: "media", media: 0xe9 };
+  after.layers[0].bindings[7] = { type: "key", steps: [{ mods: 0, code: 0x04 }], delay: 0 };
+  const failures = diffProfiles(after, ed, L).filter(r => r.kind !== "del");
+  eq("verification reports no failure", failures.length, 0);
+
+  // A binding that genuinely did not store must still be caught.
+  const bad = blankProfile();
+  for (const slot of [1, 2, 3, 4, 5, 6]) bad.layers[0].bindings[slot] = { type: "media", media: 0xe9 };
+  const real = diffProfiles(bad, ed, L).filter(r => r.kind !== "del");
+  eq("a real failure is still caught", real.length, 1);
+  eq("  named correctly", real[0].name, "L1 key 5");   // slot 7 is key 5
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

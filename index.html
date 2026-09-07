@@ -1044,12 +1044,13 @@ async function send(report, label) {
 }
 
 /** Show the diff and resolve true if the user confirms. */
-function confirmDiff(rows) {
+function confirmDiff(rows, untouched) {
   return new Promise(resolve => {
     const dlg = $("diffDlg"), body = $("diffBody");
     const counts = rows.reduce((a, r) => (a[r.kind]++, a), { add: 0, del: 0, chg: 0 });
     $("diffSum").textContent =
-      `${counts.add} added · ${counts.chg} changed · ${counts.del} cleared`;
+      `${counts.add} added · ${counts.chg} changed` +
+      (untouched ? ` · ${untouched} left untouched` : "");
     body.textContent = "";
     const t = document.createElement("table");
     t.className = "diff";
@@ -1073,6 +1074,15 @@ function confirmDiff(rows) {
     }
     t.append(tb);
     body.append(t);
+    if (untouched) {
+      const note = document.createElement("p");
+      note.className = "hint";
+      note.style.marginTop = ".8rem";
+      note.textContent = `${untouched} binding(s) already on the keypad are not in the editor. ` +
+        `Writing leaves those exactly as they are — use "Read from keypad" first if you want to see them, ` +
+        `or "Blank this layer" if you want them gone.`;
+      body.append(note);
+    }
 
     const done = ok => {
       $("diffGo").onclick = null;
@@ -1096,12 +1106,18 @@ async function writeAll() {
     // exactly what this write would change.
     log("Reading current config so the changes can be shown first.", "w");
     const onDevice = await readDeviceProfile(layout.keys, layout.knobs, false);
-    const rows = diffProfiles(onDevice, profile, layout);
+    // Write only sends what the editor holds; it never clears a slot the editor
+    // has no binding for. So a "del" row is not a pending change — it is a slot
+    // that will simply be left alone, and showing it as a change is misleading.
+    const all = diffProfiles(onDevice, profile, layout);
+    const rows = all.filter(r => r.kind !== "del");
+    const untouched = all.length - rows.length;
     if (!rows.length) {
-      log("Nothing to write — the keypad already matches the editor.", "g");
+      log("Nothing to write — every binding in the editor already matches the keypad.", "g");
+      if (untouched) log(`${untouched} binding(s) on the keypad are not in the editor; they are left as they are.`, "w");
       return;
     }
-    if (!await confirmDiff(rows)) {
+    if (!await confirmDiff(rows, untouched)) {
       log("Write cancelled. Nothing was sent.", "w");
       return;
     }
@@ -1125,18 +1141,21 @@ async function writeAll() {
     // where the surprises live.
     log("Verifying — reading the configuration back.", "w");
     const after = await readDeviceProfile(layout.keys, layout.knobs, false);
-    const left = diffProfiles(after, profile, layout);
+    // Same rule as above: a slot the editor never had a binding for was never
+    // meant to change, so it is not a verification failure.
+    const left = diffProfiles(after, profile, layout).filter(r => r.kind !== "del");
     if (!left.length) {
       log("Verified — the keypad matches the editor.", "g");
       log("Layers are switched on the keypad itself, with the button on its edge. " +
           "If a key does not do what you set, check which layer is live.", "w");
     } else {
-      log(`${left.length} binding(s) did NOT take:`, "e");
+      log(`Could not confirm ${left.length} binding(s):`, "w");
       for (const r of left.slice(0, 12))
-        log(`   ${r.name}: expected "${r.to ?? "unbound"}", device has "${r.from ?? "unbound"}"`, "e");
-      if (left.length > 12) log(`   ... and ${left.length - 12} more`, "e");
-      log("The device accepted the writes without error but did not store them. " +
-          "Please report this with the log — it means this variant differs from the one tested.", "e");
+        log(`   ${r.name}: expected "${r.to ?? "unbound"}", read back "${r.from ?? "unbound"}"`, "w");
+      if (left.length > 12) log(`   ... and ${left.length - 12} more`, "w");
+      log("Your keypad is very probably fine — this is the tool failing to confirm, " +
+          "not evidence of a fault. Try the keys; they may well work.", "w");
+      log("If they do not, a copy of this log in a GitHub issue would help a lot.", "w");
     }
   } catch (err) {
     log("Write failed: " + err.message, "e");

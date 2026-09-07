@@ -180,6 +180,11 @@ nothing tells you why.
    confirms every binding actually stored. A write returning no error is not the
    same as the device having kept it.
 
+> **Writing only sends what the editor holds.** It never clears a key the editor
+> has no binding for, so bindings already on the keypad that you have not loaded
+> are left exactly as they are. Use **Read from keypad** first if you want to see
+> and edit them, or **Blank this layer** if you want them gone.
+
 > **Layers are switched on the keypad**, with the button on its edge — not from
 > this page. The indicator LEDs beside the knobs show which layer is live. If a
 > binding writes and verifies but the key still does not type what you set, check
