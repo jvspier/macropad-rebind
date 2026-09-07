@@ -57,6 +57,36 @@ includes the report ID as byte 0 of a read while WebHID does not, so **offsets
 shift by one between the two APIs**. All offsets below are WebHID payload
 offsets, where byte 0 is the command.
 
+## Not one protocol — three dialects
+
+These keypads do not all speak the same protocol, and the split does not follow
+vendor or product id alone:
+
+| Dialect | Devices | Write command |
+|---|---|---|
+| **ch57x-1** | `1189:8840`, `1189:8842`, `1189:8850`, `514c:8851` | `0xFE` |
+| ch57x-2 | `1189:8890` | different framing |
+| ch57x-3 | `514c:8850` | `0xFD` |
+
+Note that **`1189:8850` and `514c:8850` share a product id and differ** — so any
+dispatch has to key on the pair, not on the product id.
+
+Everything documented below is **ch57x-1**, confirmed against a `1189:8842`.
+
+`ch57x-3` differs substantially: the write command is `0xFD`, the header is 5
+bytes rather than 10, sequence entries are 3 bytes rather than 2, and modifiers
+are not a bitmask — each one is its own entry with a code in `0xF1`–`0xF8`. Its
+media and mouse payloads are laid out differently again.
+
+Sending ch57x-1 messages to a ch57x-3 device is **accepted without error and does
+nothing useful**, which is how one user came to report that saving appeared to
+work while none of the keys did anything. Detect the dialect and refuse rather
+than write hopefully.
+
+The mapping comes from
+[ch57x-keyboard-tool](https://github.com/kriomant/ch57x-keyboard-tool)'s
+`SUPPORTED_DEVICES` table, which has separate implementations per dialect.
+
 ## Commands
 
 | Byte 0 | Meaning |

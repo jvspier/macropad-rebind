@@ -431,6 +431,38 @@ const REPORT_LEN = 64;
    silently refused to offer. */
 const VENDOR_IDS = [0x1189, 0x514C];
 
+/* ------------------------------------------------------------------
+   Protocol dialect by (vendor, product).
+
+   These keypads do not all speak the same protocol. Three dialects are
+   known, and the split is NOT by vendor or by product alone — note that
+   1189:8850 and 514C:8850 share a product id and differ:
+
+     ch57x-1   what this tool implements. Write command 0xFE, a 10-byte
+               header, and (modifier-bitmask, keycode) pairs.
+     ch57x-2   1189:8890. Different framing.
+     ch57x-3   514C:8850. Write command 0xFD, a 5-byte header, and
+               3-byte sequence entries where modifiers are their own
+               entries with codes 0xF1..0xF8 rather than a bitmask.
+
+   Mapping taken from ch57x-keyboard-tool's SUPPORTED_DEVICES table.
+   Sending ch57x-1 messages to a ch57x-3 device is accepted without any
+   error and does nothing useful, which is exactly what one user saw.
+   ------------------------------------------------------------------ */
+const MODELS = [
+  { vid: 0x1189, pid: 0x8840, dialect: "ch57x-1" },
+  { vid: 0x1189, pid: 0x8842, dialect: "ch57x-1" },   // developed against this
+  { vid: 0x1189, pid: 0x8850, dialect: "ch57x-1" },
+  { vid: 0x514C, pid: 0x8851, dialect: "ch57x-1" },
+  { vid: 0x1189, pid: 0x8890, dialect: "ch57x-2" },
+  { vid: 0x514C, pid: 0x8850, dialect: "ch57x-3" },
+];
+const IMPLEMENTED_DIALECT = "ch57x-1";
+
+function modelFor(vid, pid) {
+  return MODELS.find(m => m.vid === vid && m.pid === pid) || null;
+}
+
 const CMD_WRITE  = 0xFE;
 const CMD_COMMIT = 0xFD;   // sent as FD FE FF
 const CMD_SEP    = 0xAA;   // sent as AA AA
@@ -974,6 +1006,22 @@ async function connect(broad) {
     // hardware exposes a vendor HID collection on this usage page, and writing
     // to one of those could misconfigure it. Answering 0xFB with a plausible
     // layout is proof the device actually speaks this protocol.
+    // Before anything else: is this a dialect we can actually speak? Getting
+    // this wrong is silent — the device accepts well-formed messages in the
+    // wrong language and stores nothing useful.
+    const model = modelFor(device.vendorId, device.productId);
+    if (model && model.dialect !== IMPLEMENTED_DIALECT) {
+      log(`This is a ${model.dialect} device. It uses a different protocol ` +
+          `dialect from the one implemented here (${IMPLEMENTED_DIALECT}).`, "e");
+      log(`Writing is disabled — sending it the wrong dialect would appear to ` +
+          `succeed and change nothing. Reads may still work; try them.`, "w");
+      log(`Support for ${model.dialect} is tracked at ` +
+          `github.com/jvspier/macropad-rebind/issues`, "w");
+      renderAll();
+      navigator.hid.addEventListener("disconnect", e => { if (e.device === device) disconnected(); });
+      return;
+    }
+
     const found = await detect();
     verified = !!found && found.keys <= 15 && found.knobs <= 4
                && (found.keys + found.knobs) > 0;

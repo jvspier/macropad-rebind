@@ -54,6 +54,14 @@ If your pad has some other vendor id, press **Device not listed?** instead of
 **Connect keypad**. That drops the vendor filter and offers any device with the
 right HID interface, and the log prints the id so it can be added.
 
+> **Not every model speaks the same protocol.** Three dialects exist and this
+> tool implements one of them — the one used by `1189:8840`, `1189:8842`,
+> `1189:8850` and `514c:8851`. Two models need a different dialect: `1189:8890`
+> and `514c:8850` (note that shares a product id with `1189:8850` and is *not*
+> the same protocol). Connect to one of those and the tool says so and disables
+> writing, rather than sending messages it knows the device will silently
+> ignore. See [docs/PROTOCOL.md](docs/PROTOCOL.md#not-one-protocol--three-dialects).
+
 These are sold as: *3 key macro pad*, *6 key macropad with knob*, *9 key RGB
 keypad*, *12 key macro keyboard with 2 knobs*, *15 key shortcut pad*, *mini
 gaming keypad*, *one-handed keyboard*, *Photoshop shortcut pad*, *streaming

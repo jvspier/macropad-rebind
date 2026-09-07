@@ -22,12 +22,12 @@ const core = js.slice(
 
 const mod = await import(
   "data:text/javascript;base64," +
-  Buffer.from(core + "\nexport {bindingReports, ledReports, keySlot, knobSlot, decodeRecord, touch, emptyReports, variantReport, DEVICE_VARIANTS, textToSteps, diffProfiles, blankProfile, LAYOUTS, findLayout, gridOrder, posOfSlot, DEFAULT_LAYOUT, VENDOR_IDS};\n").toString("base64")
+  Buffer.from(core + "\nexport {bindingReports, ledReports, keySlot, knobSlot, decodeRecord, touch, emptyReports, variantReport, DEVICE_VARIANTS, textToSteps, diffProfiles, blankProfile, LAYOUTS, findLayout, gridOrder, posOfSlot, DEFAULT_LAYOUT, VENDOR_IDS, MODELS, modelFor, IMPLEMENTED_DIALECT};\n").toString("base64")
 );
 const { bindingReports, ledReports, keySlot, knobSlot, decodeRecord, touch,
         emptyReports, variantReport, DEVICE_VARIANTS, textToSteps, diffProfiles,
         blankProfile, LAYOUTS, findLayout, gridOrder, posOfSlot, DEFAULT_LAYOUT,
-        VENDOR_IDS } = mod;
+        VENDOR_IDS, MODELS, modelFor, IMPLEMENTED_DIALECT } = mod;
 
 let pass = 0, fail = 0;
 const hx = a => Array.from(a, b => b.toString(16).padStart(2, "0")).join(" ");
@@ -407,6 +407,32 @@ console.log("\nwrite scope: an unloaded editor must not look like failure");
   const real = diffProfiles(bad, ed, L).filter(r => r.kind !== "del");
   eq("a real failure is still caught", real.length, 1);
   eq("  named correctly", real[0].name, "L1 key 5");   // slot 7 is key 5
+}
+
+
+console.log("\nprotocol dialects");
+{
+  // The trap that cost a user their keys working: same product id, different
+  // vendor id, DIFFERENT protocol. Dispatch must use both halves.
+  eq("1189:8850 is the dialect we implement", modelFor(0x1189, 0x8850).dialect, "ch57x-1");
+  eq("514c:8850 is NOT", modelFor(0x514C, 0x8850).dialect, "ch57x-3");
+  eq("  ... so pid alone is not enough",
+     modelFor(0x1189, 0x8850).dialect === modelFor(0x514C, 0x8850).dialect, false);
+
+  eq("1189:8842 (the tested unit)", modelFor(0x1189, 0x8842).dialect, "ch57x-1");
+  eq("1189:8840", modelFor(0x1189, 0x8840).dialect, "ch57x-1");
+  eq("514c:8851", modelFor(0x514C, 0x8851).dialect, "ch57x-1");
+  eq("1189:8890", modelFor(0x1189, 0x8890).dialect, "ch57x-2");
+  eq("unknown pair returns null", modelFor(0x1189, 0x9999), null);
+
+  eq("we implement ch57x-1", IMPLEMENTED_DIALECT, "ch57x-1");
+  const other = MODELS.filter(m => m.dialect !== IMPLEMENTED_DIALECT);
+  eq("  2 models need a dialect we do not have", other.length, 2);
+  // Every model's vendor must be one the picker will offer, or it is unreachable.
+  eq("every model's vendor is in the filter",
+     MODELS.every(m => VENDOR_IDS.includes(m.vid)), true);
+  eq("no duplicate vendor/product pairs",
+     new Set(MODELS.map(m => `${m.vid}:${m.pid}`)).size, MODELS.length);
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
