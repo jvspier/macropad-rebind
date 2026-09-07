@@ -375,6 +375,11 @@ ch57x-keyboard-tool. No code is taken from it, but comparing against it
 for byte. It is also a third implementation whose LED model has no per-key colour.
 Worth a look if you prefer its interface.
 
+And [Palanx/CH57x-Whisperer](https://github.com/Palanx/CH57x-Whisperer), a native
+macOS tool for this hardware. No licence is stated, so no code is taken from it —
+but its decoder independently confirms this project's read offsets, and its media
+list is where the launcher usages above were corroborated.
+
 If you would rather have a command-line tool driven by a YAML file, use that one —
 it is excellent, and it supports keyboards this page does not.
 

@@ -544,12 +544,21 @@ const MODIFIERS = [
   { bit:0x40, label:"RAlt"  }, { bit:0x80, label:"RSuper" },
 ];
 
+/* Consumer-page usages. The first block is confirmed against hardware; the
+   launcher and tone controls come from the vendor application's own MultiMedia
+   tab, and the launchers are independently corroborated by
+   Palanx/CH57x-Whisperer's decoder. Whether a given usage does anything depends
+   on the host OS, not the keypad. */
 const MEDIA = [
   ["Volume up",0xe9], ["Volume down",0xea], ["Mute",0xe2],
   ["Play / pause",0xcd], ["Next track",0xb5], ["Previous track",0xb6],
   ["Stop",0xb7], ["Brightness up",0x6f], ["Brightness down",0x70],
   ["Calculator",0x192], ["Favourites",0x182], ["Lock screen",0x19e],
   ["Browser home",0x223], ["Browser back",0x224], ["Browser forward",0x225],
+  ["Browser refresh",0x227], ["My computer",0x194], ["E-mail",0x18a],
+  ["Media player",0x183],
+  ["Bass up",0x152], ["Bass down",0x153],
+  ["Treble up",0x154], ["Treble down",0x155],
 ];
 
 const LED_COLORS = [

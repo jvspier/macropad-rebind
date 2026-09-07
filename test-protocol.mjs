@@ -22,13 +22,13 @@ const core = js.slice(
 
 const mod = await import(
   "data:text/javascript;base64," +
-  Buffer.from(core + "\nexport {bindingReports, ledReports, keySlot, knobSlot, decodeRecord, touch, emptyReports, variantReport, DEVICE_VARIANTS, textToSteps, diffProfiles, blankProfile, LAYOUTS, findLayout, gridOrder, posOfSlot, DEFAULT_LAYOUT, VENDOR_IDS, MODELS, modelFor, IMPLEMENTED_DIALECT, ch3Reports, DIALECT_CAPS, displayGrid, knobOrder, ORIENTATIONS};\n").toString("base64")
+  Buffer.from(core + "\nexport {bindingReports, ledReports, keySlot, knobSlot, decodeRecord, touch, emptyReports, variantReport, DEVICE_VARIANTS, textToSteps, diffProfiles, blankProfile, LAYOUTS, findLayout, gridOrder, posOfSlot, DEFAULT_LAYOUT, VENDOR_IDS, MODELS, modelFor, IMPLEMENTED_DIALECT, ch3Reports, DIALECT_CAPS, displayGrid, knobOrder, ORIENTATIONS, MEDIA};\n").toString("base64")
 );
 const { bindingReports, ledReports, keySlot, knobSlot, decodeRecord, touch,
         emptyReports, variantReport, DEVICE_VARIANTS, textToSteps, diffProfiles,
         blankProfile, LAYOUTS, findLayout, gridOrder, posOfSlot, DEFAULT_LAYOUT,
         VENDOR_IDS, MODELS, modelFor, IMPLEMENTED_DIALECT, ch3Reports,
-        DIALECT_CAPS, displayGrid, knobOrder, ORIENTATIONS } = mod;
+        DIALECT_CAPS, displayGrid, knobOrder, ORIENTATIONS, MEDIA } = mod;
 
 let pass = 0, fail = 0;
 const hx = a => Array.from(a, b => b.toString(16).padStart(2, "0")).join(" ");
@@ -540,6 +540,30 @@ console.log("\norientation (idea from ch57x-keyboard-tool)");
   for (const o of ORIENTATIONS.map(x => x.id))
     eq(`11+3 keeps one hole when ${o}`,
        gridOrder({ ...findLayout(11, 3), orientation: o }).filter(x => x === 0).length, 1);
+}
+
+
+console.log("\nmedia usages");
+{
+  const by = new Map(MEDIA.map(([n, c]) => [c, n]));
+  eq("23 media usages offered", MEDIA.length, 23);
+  eq("  no duplicate codes", new Set(MEDIA.map(m => m[1])).size, MEDIA.length);
+  eq("  all inside the consumer page", MEDIA.every(([, c]) => c > 0 && c <= 0x2ff), true);
+  // Confirmed on hardware from a real config read.
+  eq("volume up is 0xe9",  by.get(0xe9), "Volume up");
+  eq("previous is 0xb6",   by.get(0xb6), "Previous track");
+  // Added from the vendor UI, corroborated by CH57x-Whisperer's decoder.
+  eq("my computer 0x194",  !!by.get(0x194), true);
+  eq("e-mail 0x18a",       !!by.get(0x18a), true);
+  eq("media player 0x183", !!by.get(0x183), true);
+  eq("refresh 0x227",      !!by.get(0x227), true);
+  // Tone controls from the vendor UI; standard HID consumer usages.
+  eq("bass/treble present",
+     [0x152, 0x153, 0x154, 0x155].every(c => by.has(c)), true);
+  // A 16-bit usage must survive the little-endian split in a report.
+  const r = bindingReports(1, { type: "media", media: 0x227 })[0];
+  eq("0x227 low byte",  r[10], 0x27);
+  eq("0x227 high byte", r[11], 0x02);
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);

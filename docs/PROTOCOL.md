@@ -142,10 +142,13 @@ rather than a fixed `0xFE` with a slot argument. VMacropad's action ids are
 
 Two of those are new information.
 
-`0xA1 <layer>` **selects the live layer from the host.** No such command is known
-for ch57x-1 — the two `0xA1` constants in the ch57x-1 vendor binary are in
-`Widget::Widget()`, so they are UI values, not protocol. Whether ch57x-1 honours
-`0xA1` anyway is untested.
+`0xA1 <layer>` **selects the live layer from the host.** That is ch57x-2 only.
+**Tested and rejected on ch57x-1:** `03 A1 00` through `03 A1 03` were sent to a
+`1189:8842` with seven seconds between each, watching the layer indicator LEDs
+and pressing keys. Nothing changed. The two `0xA1` constants in the ch57x-1
+vendor binary are inside `Widget::Widget()`, so they are UI values rather than
+protocol, which agrees. On ch57x-1 the live layer really can only be changed with
+the button on the case.
 
 And `0xAA 0xAA`, which ch57x-keyboard-tool treats as an opaque separator, is a
 **flash commit** in VMacropad's naming. That is a better mental model for why
@@ -237,7 +240,15 @@ Per slot: the record, then optionally a delay record, then `AA AA`, `FD FE FF`,
 
 ## Reading
 
-> **Independently confirmed.** [PollRobots/ch57x-programmer](https://github.com/PollRobots/ch57x-programmer)
+> **Independently confirmed twice.** [Palanx/CH57x-Whisperer](https://github.com/Palanx/CH57x-Whisperer)
+> (no licence stated — read for facts, no code taken), a native macOS tool for
+> `1189:8840`, decodes replies at the same offsets: `[1]` is `0xFA`, `[4]` the
+> type, pairs from `[11]`, media as `[11] | [12] << 8`, mouse modifier at `[11]`,
+> buttons `[12]`, wheel `[15]` — all matching this document once the report id is
+> accounted for. It also agrees on the 18-accord and 6000 ms limits and on the
+> `AA AA` / `FD FE FF` / `AA AA` finish.
+>
+> And [PollRobots/ch57x-programmer](https://github.com/PollRobots/ch57x-programmer)
 > (MIT), a separate browser-based tool, arrives at byte-identical read buffers —
 > `[0xFB, 0xFB, 0xFB]` and `[0xFA, buttons, encoders, layer]` — and parses replies
 > with slot at `[1]`, layer at `[2] - 1` and type at `[3]`. Its ch57x-1 write path
@@ -343,11 +354,16 @@ the LED record.
     03 FE B0 <layer+1> 08 00 00 00 00 00 01 00 <code>
     03 FD FE FF
 
-One unresolved divergence: PollRobots/ch57x-programmer terminates the LED write
-with `FD F0 FF` rather than `FD FE FF`, while using `FD FE FF` for key bindings
-as here. Both appear to work — `FD FE FF` is what this project sends, and
-lighting changes do take effect on a `1189:8842` — but if you meet lighting that
-will not update, `F0` is the first thing to try.
+Two divergences are worth knowing if lighting ever refuses to update.
+
+PollRobots/ch57x-programmer terminates the LED write with `FD F0 FF` rather than
+`FD FE FF`, while using `FD FE FF` for key bindings as here.
+
+And CH57x-Whisperer sends a **read preamble** before every LED write — a `0xFB`
+device-type query, then a `0xFA` read of each of the three layers — before the
+`0xFE 0xB0` record. Neither is needed on a `1189:8842`, where the plain write
+works, but a preamble that reads before writing is the kind of thing an author
+adds after finding that lighting otherwise fails to stick.
 
 Colours 1–7 are red, orange, yellow, green, cyan, blue, purple. The LEDs are
 genuinely RGB. All six modes observed on hardware:
