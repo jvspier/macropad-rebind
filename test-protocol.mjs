@@ -22,12 +22,13 @@ const core = js.slice(
 
 const mod = await import(
   "data:text/javascript;base64," +
-  Buffer.from(core + "\nexport {bindingReports, ledReports, keySlot, knobSlot, decodeRecord, touch, emptyReports, variantReport, DEVICE_VARIANTS, textToSteps, diffProfiles, blankProfile, LAYOUTS, findLayout, gridOrder, posOfSlot, DEFAULT_LAYOUT, VENDOR_IDS, MODELS, modelFor, IMPLEMENTED_DIALECT};\n").toString("base64")
+  Buffer.from(core + "\nexport {bindingReports, ledReports, keySlot, knobSlot, decodeRecord, touch, emptyReports, variantReport, DEVICE_VARIANTS, textToSteps, diffProfiles, blankProfile, LAYOUTS, findLayout, gridOrder, posOfSlot, DEFAULT_LAYOUT, VENDOR_IDS, MODELS, modelFor, IMPLEMENTED_DIALECT, ch3Reports, DIALECT_CAPS};\n").toString("base64")
 );
 const { bindingReports, ledReports, keySlot, knobSlot, decodeRecord, touch,
         emptyReports, variantReport, DEVICE_VARIANTS, textToSteps, diffProfiles,
         blankProfile, LAYOUTS, findLayout, gridOrder, posOfSlot, DEFAULT_LAYOUT,
-        VENDOR_IDS, MODELS, modelFor, IMPLEMENTED_DIALECT } = mod;
+        VENDOR_IDS, MODELS, modelFor, IMPLEMENTED_DIALECT, ch3Reports,
+        DIALECT_CAPS } = mod;
 
 let pass = 0, fail = 0;
 const hx = a => Array.from(a, b => b.toString(16).padStart(2, "0")).join(" ");
@@ -435,6 +436,67 @@ console.log("\nprotocol dialects");
      MODELS.every(m => VENDOR_IDS.includes(m.vid)), true);
   eq("no duplicate vendor/product pairs",
      new Set(MODELS.map(m => `${m.vid}:${m.pid}`)).size, MODELS.length);
+}
+
+
+console.log("\nch57x-3 encoder (514c:8850) — ported, NOT hardware-verified");
+{
+  // Asserted against ch57x-keyboard-tool's k8850_4x4.rs, read line by line.
+  // Ctrl+A: the modifier is its OWN 3-byte entry, then the keycode entry.
+  let r = ch3Reports(1, { type: "key", steps: [{ mods: 0x01, code: 0x04 }], delay: 0 }, 0);
+  check("ctrl-a on key 1", r[0], [0x03,0xfd,0x01,0x01,0x01, 0x00,0x02, 0,0,0xf1, 0,0,0x04]);
+  check("  terminator",    r[1], [0x03,0xfd,0xfe,0xff]);
+  eq("  two reports, no 0xAA separators", r.length, 2);
+
+  // Plain key: one entry.
+  r = ch3Reports(2, { type: "key", steps: [{ mods: 0, code: 0x04 }], delay: 0 }, 0);
+  check("plain 'a'", r[0], [0x03,0xfd,0x02,0x01,0x01, 0x00,0x01, 0,0,0x04]);
+
+  // Every modifier maps to its own 0xF1..0xF8 code.
+  r = ch3Reports(1, { type: "key", steps: [{ mods: 0xff, code: 0x04 }], delay: 0 }, 0);
+  eq("all 8 modifiers + key = 9 entries", r[0][5], 9);
+  eq("  first is 0xF1 (ctrl)", r[0][8], 0xf1);
+  eq("  eighth is 0xF8 (rwin)", r[0][8 + 7*3], 0xf8);
+
+  // The 18-entry cap counts modifiers, so this must be rejected.
+  let threw = false;
+  try {
+    ch3Reports(1, { type: "key", delay: 0,
+      steps: Array.from({length: 10}, () => ({ mods: 0x01, code: 0x04 })) }, 0);
+  } catch { threw = true; }
+  eq("20 entries (10 ctrl+key) is rejected", threw, true);
+
+  // Media has its own layout entirely.
+  r = ch3Reports(3, { type: "media", media: 0xe9 }, 0);
+  check("volume up", r[0], [0x03,0xfd,0x03,0x01,0x02, 0,2,0,0, 0xe9, 0,0, 0x00]);
+
+  // Mouse is a 17-byte block at fixed offsets.
+  r = ch3Reports(4, { type: "mouse", action: "click", buttons: 1, mod: 0 }, 0);
+  check("left click", r[0], [0x03,0xfd,0x04,0x01,0x03, 1,4,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0]);
+  r = ch3Reports(4, { type: "mouse", action: "wheel", wheel: 3, mod: 0 }, 0);
+  eq("wheel delta at block offset 16", r[0][4 + 16], 3);
+  r = ch3Reports(4, { type: "mouse", action: "move", dx: 10, dy: -5, mod: 0 }, 0);
+  eq("dx at block offset 10", r[0][4 + 10], 10);
+  eq("dy at block offset 13 (-5 as 0xfb)", r[0][4 + 13], 0xfb);
+
+  // Drag genuinely is not supported by this dialect.
+  threw = false;
+  try { ch3Reports(4, { type:"mouse", action:"drag", buttons:1, dx:1, dy:1, mod:0 }, 0); }
+  catch { threw = true; }
+  eq("drag is rejected", threw, true);
+
+  // Slot numbering differs: 16 keys, so knobs start at 17 not 16.
+  eq("ch57x-1 knob 1 ccw", knobSlot(0, 0, "ch57x-1"), 16);
+  eq("ch57x-3 knob 1 ccw", knobSlot(0, 0, "ch57x-3"), 17);
+  eq("ch57x-3 knob 2 cw",  knobSlot(1, 2, "ch57x-3"), 22);
+  eq("ch57x-3 allows 16 keys", DIALECT_CAPS["ch57x-3"].maxKeys, 16);
+  eq("ch57x-1 allows 15",      DIALECT_CAPS["ch57x-1"].maxKeys, 15);
+
+  // Capability flags must reflect what the dialect can actually do.
+  eq("ch57x-3 has no LED command",  DIALECT_CAPS["ch57x-3"].led, false);
+  eq("ch57x-3 has no read command", DIALECT_CAPS["ch57x-3"].read, false);
+  eq("ch57x-3 is untested",         DIALECT_CAPS["ch57x-3"].tested, false);
+  eq("ch57x-1 is tested",           DIALECT_CAPS["ch57x-1"].tested, true);
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);

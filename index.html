@@ -460,6 +460,14 @@ const MODELS = [
 ];
 const IMPLEMENTED_DIALECT = "ch57x-1";
 
+/* What each dialect can do. ch57x-3 has no known LED command and no known read
+   command, so lighting, read-back, write verification, blanking and identity
+   repair are all unavailable there — it can only be written to, blind. */
+const DIALECT_CAPS = {
+  "ch57x-1": { write: true,  read: true,  led: true,  maxKeys: 15, knobBase: 16, tested: true  },
+  "ch57x-3": { write: true,  read: false, led: false, maxKeys: 16, knobBase: 17, tested: false },
+};
+
 function modelFor(vid, pid) {
   return MODELS.find(m => m.vid === vid && m.pid === pid) || null;
 }
@@ -581,7 +589,7 @@ const KNOB_GLYPH   = { ccw:"↺", press:"●", cw:"↻" };
    hardware, and not something you can infer from a config where both are
    bound to volume. Actions run ccw, press, cw. */
 const keySlot  = i => i + 1;
-const knobSlot = (k, a) => 16 + 3 * k + a;
+const knobSlot = (k, a, d) => (DIALECT_CAPS[d || dialect]?.knobBase ?? 16) + 3 * k + a;
 
 /* ------------------------------------------------------------------
    Physical arrangement.
@@ -622,6 +630,10 @@ const LAYOUTS = [
   { keys: 12, knobs: 2, cols: 3, rows: 4 },   // verified on hardware
   { keys: 12, knobs: 3, cols: 4, rows: 3 },
   { keys: 15, knobs: 3, cols: 5, rows: 3 },
+  { keys: 16, knobs: 0, cols: 4, rows: 4 },   // ch57x-3 "4x4" devices
+  { keys: 16, knobs: 1, cols: 4, rows: 4 },
+  { keys: 16, knobs: 2, cols: 4, rows: 4 },
+  { keys: 16, knobs: 3, cols: 4, rows: 4 },
 ];
 const DEFAULT_LAYOUT = { keys: 12, knobs: 2, cols: 3, rows: 4 };
 
@@ -666,6 +678,7 @@ let profile = loadProfile();
 let layer = 0;
 let sel = null;              // { slot, label }
 let device = null;
+let dialect = IMPLEMENTED_DIALECT;   // set from the device on connect
 let verified = false;      // device has answered 0xFB with a usable layout
 let captureArmed = false;
 
@@ -744,6 +757,8 @@ function msg(bytes) {
 
 /** All reports needed to program one slot. */
 function bindingReports(slot, b) {
+  if (dialect === "ch57x-3") return ch3Reports(slot, b, layer);
+
   const head = [CMD_WRITE, slot, layer + 1];
   let m;
 
@@ -796,6 +811,64 @@ function bindingReports(slot, b) {
   reports.push(msg([CMD_COMMIT, 0xFE, 0xFF]));
   reports.push(msg([CMD_SEP, CMD_SEP]));
   return reports;
+}
+
+/* ------------------------------------------------------------------
+   ch57x-3 encoder (514C:8850), ported from ch57x-keyboard-tool's
+   src/keyboard/k8850_4x4.rs.
+
+   Structurally unlike ch57x-1:
+     - write command 0xFD, and the header is 4 payload bytes not 10
+     - a sequence entry is 3 bytes, [0, 0, code], not a 2-byte pair
+     - modifiers are NOT a bitmask; each is its own entry, 0xF1..0xF8
+     - the 18-entry limit counts modifiers, so Ctrl+A costs two
+     - media and mouse payloads are laid out differently again
+     - mouse drag is not supported at all
+     - no LED command and no read command are known
+
+   NOT verified against hardware — nobody here has one of these.
+   ------------------------------------------------------------------ */
+const CH3_MODS  = [0xF1, 0xF2, 0xF3, 0xF4, 0xF5, 0xF6, 0xF7, 0xF8];  // bit 0..7
+const CH3_MOUSE = { 0x01: 0xF1, 0x02: 0xF2, 0x04: 0xF3 };            // ctrl/shift/alt
+const CH3_MAX_ENTRIES = 18;
+
+function ch3Reports(slot, b, layerIdx) {
+  const head = [0xFD, slot, layerIdx + 1];
+  let m;
+
+  if (b.type === "key") {
+    const entries = [];
+    for (const st of b.steps) {
+      for (let bit = 0; bit < 8; bit++)
+        if (st.mods & (1 << bit)) entries.push(CH3_MODS[bit]);
+      entries.push(st.code || 0);
+    }
+    if (entries.length > CH3_MAX_ENTRIES)
+      throw new Error(`too long for this device: ${entries.length} entries, ` +
+                      `${CH3_MAX_ENTRIES} max (modifiers count separately)`);
+    const body = [];
+    for (const c of entries) body.push(0, 0, c);
+    m = [...head, TYPE_KEYBOARD, 0, entries.length, ...body];
+
+  } else if (b.type === "media") {
+    const c = b.media & 0xffff;
+    m = [...head, TYPE_MEDIA, 0, 2, 0, 0, c & 0xff, 0, 0, (c >> 8) & 0xff];
+
+  } else if (b.type === "mouse") {
+    if (b.action === "drag") throw new Error("mouse drag is not supported on this device");
+    const md = new Array(17).fill(0);
+    md[0] = 1; md[1] = 4;
+    md[4] = CH3_MOUSE[b.mod] || 0;
+    if (b.action === "click")      md[7]  = b.buttons || 0;
+    else if (b.action === "move") { md[10] = i8(b.dx); md[13] = i8(b.dy); }
+    else if (b.action === "wheel") md[16] = i8(b.wheel);
+    m = [...head, TYPE_MOUSE, ...md];
+
+  } else {
+    return [];
+  }
+  // One terminator, and no 0xAA separators — unlike ch57x-1.
+  return [msg(m), msg([CMD_COMMIT, 0xFE, 0xFF])];
 }
 
 /** The record this device stores for a key that does nothing. */
@@ -1011,25 +1084,45 @@ async function connect(broad) {
     // this wrong is silent — the device accepts well-formed messages in the
     // wrong language and stores nothing useful.
     const model = modelFor(device.vendorId, device.productId);
-    if (model && model.dialect !== IMPLEMENTED_DIALECT) {
-      log(`This is a ${model.dialect} device. It uses a different protocol ` +
-          `dialect from the one implemented here (${IMPLEMENTED_DIALECT}).`, "e");
-      log(`Writing is disabled — sending it the wrong dialect would appear to ` +
-          `succeed and change nothing. Reads may still work; try them.`, "w");
-      log(`Support for ${model.dialect} is tracked at ` +
-          `github.com/jvspier/macropad-rebind/issues`, "w");
+    dialect = model ? model.dialect : IMPLEMENTED_DIALECT;
+    const caps = DIALECT_CAPS[dialect];
+
+    if (!caps) {
+      log(`This is a ${dialect} device and no encoder for it exists here.`, "e");
+      log(`Writing is disabled — sending the wrong dialect would appear to succeed ` +
+          `and change nothing. Please open an issue if you have one of these.`, "w");
       renderAll();
       navigator.hid.addEventListener("disconnect", e => { if (e.device === device) disconnected(); });
       return;
     }
 
-    const found = await detect();
-    verified = !!found && found.keys <= 15 && found.knobs <= 4
-               && (found.keys + found.knobs) > 0;
+    if (dialect !== IMPLEMENTED_DIALECT) {
+      log(`${dialect} device — support is ported from ch57x-keyboard-tool and has ` +
+          `NEVER been tested on hardware.`, "w");
+      log(`Writing is enabled, at your own risk. This dialect has no read command, ` +
+          `so nothing can be verified: if a binding does not work, the tool cannot ` +
+          `tell you why.`, "w");
+      if (!caps.led) log(`No backlight command is known for it either — lighting is disabled.`, "w");
+      log(`Pick your model in the Layout dropdown; this dialect cannot be asked.`, "w");
+      log(`Please report what happens at github.com/jvspier/macropad-rebind/issues`, "w");
+    }
+
+    if (caps.read) {
+      $("btnRead").disabled = false;
+      $("btnDetect").disabled = false;
+      const found = await detect();
+      verified = !!found && found.keys <= caps.maxKeys && found.knobs <= 4
+                 && (found.keys + found.knobs) > 0;
+    } else {
+      // Nothing to ask, so nothing to verify. Trust the user's model choice.
+      verified = true;
+    }
     if (verified) {
       $("btnWrite").disabled = false;
-      $("btnBlank").disabled = false;
-      $("btnRepair").disabled = false;
+      // Blanking and identity repair both rely on ch57x-1 specifics — the empty
+      // record shape and 0xFC — neither of which is known for other dialects.
+      $("btnBlank").disabled = !caps.tested;
+      $("btnRepair").disabled = !caps.tested;
       const known = findLayout(found.keys, found.knobs);
       if (known && (known.keys !== layout.keys || known.knobs !== layout.knobs)) {
         setLayout(known);
@@ -1054,6 +1147,7 @@ async function connect(broad) {
 
 function disconnected() {
   device = null;
+  dialect = IMPLEMENTED_DIALECT;
   verified = false;
   setStatus("disconnected");
   $("btnWrite").disabled = true;
@@ -1154,6 +1248,13 @@ async function writeAll() {
     // Look before you leap: read what is actually on the device and show
     // exactly what this write would change.
     log("Reading current config so the changes can be shown first.", "w");
+    if (!DIALECT_CAPS[dialect]?.read) {
+      const n = profile.layers.reduce((a, l) => a + Object.values(l.bindings).filter(Boolean).length, 0);
+      if (!n) { log("Nothing in the editor to write.", "w"); return; }
+      if (!confirm(`Write ${n} binding(s)?\n\nThis device cannot be read back, so ` +
+                   `there is no diff to show you and no way to verify afterwards. ` +
+                   `Support for it is untested.`)) { log("Write cancelled.", "w"); return; }
+    } else {
     const onDevice = await readDeviceProfile(layout.keys, layout.knobs, false);
     // Write only sends what the editor holds; it never clears a slot the editor
     // has no binding for. So a "del" row is not a pending change — it is a slot
@@ -1170,6 +1271,7 @@ async function writeAll() {
       log("Write cancelled. Nothing was sent.", "w");
       return;
     }
+    }
     let slots = 0;
     const saved = layer;
     for (let l = 0; l < N_LAYERS; l++) {
@@ -1180,7 +1282,8 @@ async function writeAll() {
         for (const r of bindingReports(Number(slot), b)) await send(r);
         slots++;
       }
-      for (const r of ledReports(l, lay.led)) await send(r);
+      if (DIALECT_CAPS[dialect]?.led)
+        for (const r of ledReports(l, lay.led)) await send(r);
     }
     layer = saved;
     log(`Sent ${slots} binding${slots === 1 ? "" : "s"} and ${N_LAYERS} backlight settings.`);
@@ -1188,6 +1291,11 @@ async function writeAll() {
     // Read it straight back. "The write returned no error" is not the same as
     // "the device stored it", and on unfamiliar variants that gap is exactly
     // where the surprises live.
+    if (!DIALECT_CAPS[dialect]?.read) {
+      log("This dialect has no read command, so the write cannot be verified. " +
+          "Try the keys and see.", "w");
+      return;
+    }
     log("Verifying — reading the configuration back.", "w");
     const after = await readDeviceProfile(layout.keys, layout.knobs, false);
     // Same rule as above: a slot the editor never had a binding for was never
@@ -1497,7 +1605,7 @@ function renderLed() {
     sw.append(b);
   }
 
-  $("btnApplyLed").disabled = !device || !verified;
+  $("btnApplyLed").disabled = !device || !verified || !DIALECT_CAPS[dialect]?.led;
   $("clearLayerName").textContent = `layer ${layer + 1}`;
   $("blankLayerName").textContent = `layer ${layer + 1}`;
   const r = ledReports(layer, led)[0];

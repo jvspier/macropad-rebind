@@ -55,20 +55,27 @@ If your pad has some other vendor id, press **Device not listed?** instead of
 **Connect keypad**. That drops the vendor filter and offers any device with the
 right HID interface, and the log prints the id so it can be added.
 
-> **Not every model speaks the same protocol.** Three dialects exist and this
-> tool implements one of them — the one used by `1189:8840`, `1189:8842`,
-> `1189:8850` and `514c:8851`. Two models need a different dialect: `1189:8890`
-> and `514c:8850` (note that shares a product id with `1189:8850` and is *not*
-> the same protocol). Connect to one of those and the tool says so and disables
-> writing, rather than sending messages it knows the device will silently
-> ignore. See [docs/PROTOCOL.md](docs/PROTOCOL.md#not-one-protocol--three-dialects).
+> **Not every model speaks the same protocol.** Three dialects exist:
+>
+> - **ch57x-1** — `1189:8840`, `1189:8842`, `1189:8850`, `1189:8851`, `514c:8851`.
+>   Fully supported and verified on hardware.
+> - **ch57x-3** — `514c:8850` (note it shares a product id with `1189:8850` and is
+>   *not* the same protocol). Supported, but **ported from
+>   [ch57x-keyboard-tool](https://github.com/kriomant/ch57x-keyboard-tool) and never
+>   tested on hardware.** Writing works at your own risk; there is no read command
+>   on this dialect, so nothing can be verified, and no backlight command is known.
+>   You must pick your model from the Layout dropdown, since the device cannot be
+>   asked. The tool spells all of this out when you connect.
+> - **ch57x-2** — `1189:8890`. Not implemented; writing is refused.
+>
+> See [docs/PROTOCOL.md](docs/PROTOCOL.md#not-one-protocol--three-dialects).
 
 These are sold as: *3 key macro pad*, *6 key macropad with knob*, *9 key RGB
 keypad*, *12 key macro keyboard with 2 knobs*, *15 key shortcut pad*, *mini
 gaming keypad*, *one-handed keyboard*, *Photoshop shortcut pad*, *streaming
 keypad*, *volume knob keypad*.
 
-**All 18 layouts are supported**, from 2 keys up to 15 keys and 3 knobs — see
+**All 22 layouts are supported**, from 2 keys up to 15 keys and 3 knobs — see
 [Verified models](#verified-models) below. The layout is read from the keypad
 itself; if the on-screen grid doesn't match your hardware, pick the right model
 from the dropdown.
@@ -79,7 +86,7 @@ from the dropdown.
 
 ## Verified models
 
-All 17 are supported. The layout is read from the keypad, but the **grid shape** —
+All 22 are supported. The layout is read from the keypad, but the **grid shape** —
 how the keys are physically arranged, and therefore which slot is which key — has
 only been checked on one unit so far. The rest is inferred.
 
@@ -108,8 +115,12 @@ marked confirmed, or corrected.
 | 12 | 2 | 3×4 | ✅ yes |
 | 12 | 3 | 4×3 | — |
 | 15 | 3 | 5×3 | — |
+| 16 | 0 | 4×4 | — |
+| 16 | 1 | 4×4 | — |
+| 16 | 2 | 4×4 | — |
+| 16 | 3 | 4×4 | — |
 
-1 of 18 confirmed so far. A wrong grid is a one-line fix, and the
+1 of 22 confirmed so far. A wrong grid is a one-line fix, and the
 tests catch it immediately.
 
 ---

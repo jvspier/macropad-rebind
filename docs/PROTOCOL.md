@@ -87,6 +87,40 @@ The mapping comes from
 [ch57x-keyboard-tool](https://github.com/kriomant/ch57x-keyboard-tool)'s
 `SUPPORTED_DEVICES` table, which has separate implementations per dialect.
 
+### ch57x-3 (514C:8850)
+
+Ported here from ch57x-keyboard-tool's `k8850_4x4.rs` and **not verified against
+hardware** — nobody working on this has one. Payload offsets below exclude the
+report id, as elsewhere.
+
+    [0]     0xFD          write
+    [1]     slot id       1..16 keys, 17.. knob actions
+    [2]     layer + 1
+    [3]     type          1 keyboard, 2 media, 3 mouse
+    [4..]   payload
+
+**Keyboard** — `[0, count]`, then `count` three-byte entries `[0, 0, code]`.
+Modifiers are *not* a bitmask: each one is its own entry with a code in
+`0xF1`–`0xF8` (Ctrl, Shift, Alt, Win, then the right-hand four). So `Ctrl+A`
+costs two entries, and the 18-entry ceiling counts them.
+
+**Media** — `[0, 2, 0, 0, low, 0, 0, high]`.
+
+**Mouse** — a 17-byte block: `[0]=1`, `[1]=4`, `[4]` modifier (`0xF1`/`0xF2`/`0xF3`),
+`[7]` button bitmap, `[10]` dx, `[13]` dy, `[16]` wheel delta. **Drag is not
+supported.**
+
+Each binding is followed by a single `FD FE FF` terminator — no `AA AA`
+separators.
+
+Two capabilities are simply absent: **no LED command is known**, and **no read
+command is known**. So on this dialect there is no read-back, which means no
+diff before writing and no verification after it. A writer should say so rather
+than imply the same confidence it has on ch57x-1.
+
+Slot numbering differs too — 16 keys rather than 15, so knob actions begin at
+slot **17**, not 16.
+
 ### What the vendor software tells us
 
 Two builds of the vendor application were examined. Their device tables, decoded
