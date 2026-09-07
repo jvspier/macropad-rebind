@@ -360,11 +360,27 @@ python3 linux/probe.py
 ## Tests
 
 ```bash
-node test-protocol.mjs
+node test-protocol.mjs     # 283 assertions — building and decoding messages
+node test-app.mjs          #  23 assertions — the device layer, end to end
 ```
 
-159 assertions, no dependencies. The test pulls the message builder out of
-`index.html` itself, so it always checks the file that actually ships.
+No dependencies. Both extract from `index.html` itself, so they always check the
+file that actually ships.
+
+`test-protocol.mjs` asserts the message builders against two independent
+sources: the byte vectors published in `ch57x-keyboard-tool`'s
+`src/keyboard/k884x.rs`, and records captured from real hardware.
+
+`test-app.mjs` loads the whole script under a mock DOM and a mock keypad that
+answers `0xFB` and `0xFA` the way real hardware does, then drives connect, read
+and write. It exists because a `const` declared inside an `if` block and used
+after it once shipped and broke connecting entirely: `node --check` passes on
+that, and the protocol tests only ever load the pure core.
+
+It asserts on the app's own log — no `ReferenceError`, nothing reporting failure,
+status reads connected — because `connect()` catches its own errors. The first
+version of this test passed *with that bug still present*, since the buttons had
+already been enabled on the lines above the throw.
 
 ## Protocol
 
