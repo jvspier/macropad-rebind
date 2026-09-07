@@ -473,6 +473,15 @@ not reproduced on demand.
 Practical upshot for a writer: don't send lighting changes in quick succession.
 Set the colour once and let the effect run.
 
+## Physical gotcha: C-to-C cables
+
+Many of these keypads omit the USB-C CC pull-down resistors. Without them a
+**C-to-C cable will not enumerate the device at all** — no power, nothing on the
+bus, nothing to talk to. An A-to-C cable works. Noted in
+[IISweetHeartII/brightdata-mini-keypad](https://github.com/IISweetHeartII/brightdata-mini-keypad)'s
+device check, and worth ruling out before any protocol debugging: it presents
+identically to dead hardware.
+
 ## Can the firmware be dumped?
 
 No. Not usefully, and not safely on a device you rely on.

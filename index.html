@@ -1181,6 +1181,9 @@ async function connect(broad) {
     if (!list.length) {
       log("No device picked.", "w");
       if (!broad) log('If your keypad was not in the list at all, try "Device not listed?".', "w");
+      log("Not listed anywhere? Many of these pads omit the USB-C CC resistors, so a " +
+          "C-to-C cable never enumerates them at all. Try an A-to-C cable.", "w");
+      log("And Bluetooth models must be plugged in — the config interface is USB only.", "w");
       return;
     }
     device = list[0];

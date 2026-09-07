@@ -39,6 +39,10 @@ If your keypad came with software called `MINI_KEYBOARD`, `KEY_PRO`,
 these. They all look roughly like the one on the right — a small slab of keys
 with one to three knurled knobs along the top.
 
+> **Cable warning first:** many of these pads lack USB-C CC pull-down resistors,
+> so a **C-to-C cable will not work at all** — the device simply never appears.
+> Use A-to-C.
+
 **Check the USB ID.** The vendor is usually `1189`, sometimes `514c`:
 
 | OS | How |
@@ -331,6 +335,23 @@ nothing here applies to them.
 **Is my data sent anywhere?** No. The page has no backend. It talks straight to
 the USB device from your browser.
 
+## If the keypad does not appear at all
+
+Work down this list — the first item catches more people than the rest combined.
+
+1. **Try an A-to-C cable rather than C-to-C.** Many of these keypads omit the
+   USB-C CC pull-down resistors, so a C-to-C cable will not enumerate the device
+   *at all* — no power, nothing in `lsusb`, nothing in the browser picker. It
+   looks exactly like dead hardware. Swap the cable first.
+2. **Plug it in.** Bluetooth models cannot be configured wirelessly; the
+   configuration interface only exists over USB.
+3. **Use a Chromium browser.** Firefox and Safari have no WebHID.
+4. **Linux: install the udev rule** from `linux/`, and note the filename must
+   sort below `70` or the `uaccess` tag is ignored. Replug afterwards.
+5. **Check the USB id** — `lsusb | grep -Ei '1189|514c'`. If it reports something
+   else, press **Device not listed?**, which drops the vendor filter, and the log
+   will print the id so it can be added.
+
 ## Command line
 
 `linux/probe.py` prints the keypad's current configuration. Python 3, no
@@ -381,6 +402,10 @@ ch57x-keyboard-tool. No code is taken from it, but comparing against it
 **independently confirmed** this project's read and write paths for ch57x-1, byte
 for byte. It is also a third implementation whose LED model has no per-key colour.
 Worth a look if you prefer its interface.
+
+The C-to-C cable gotcha comes from
+[IISweetHeartII/brightdata-mini-keypad](https://github.com/IISweetHeartII/brightdata-mini-keypad)
+(MIT), whose device check warns about it.
 
 And [Palanx/CH57x-Whisperer](https://github.com/Palanx/CH57x-Whisperer), a native
 macOS tool for this hardware. No licence is stated, so no code is taken from it —
