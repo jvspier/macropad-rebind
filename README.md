@@ -70,7 +70,10 @@ right HID interface, and the log prints the id so it can be added.
 >   on this dialect, so nothing can be verified, and no backlight command is known.
 >   You must pick your model from the Layout dropdown, since the device cannot be
 >   asked. The tool spells all of this out when you connect.
-> - **ch57x-2** — `1189:8890`. Supported, **ported and untested**, from
+> - **ch57x-2** — `1189:8890`. Supported, **ported and untested**. Sources
+  contradict each other on this device: two open-source tools use the format
+  below, while the manufacturer's own software uses the ch57x-1 one. Use the
+  **format selector** to try both. Ported from
   ch57x-keyboard-tool's `k8890.rs`. This dialect is more limited: at most **5
   presses** per key, **no inter-step delay**, no read command, and its backlight
   model differs enough that lighting is disabled. Keys are 1–12 with knobs from
@@ -402,6 +405,14 @@ ch57x-keyboard-tool. No code is taken from it, but comparing against it
 **independently confirmed** this project's read and write paths for ch57x-1, byte
 for byte. It is also a third implementation whose LED model has no per-key colour.
 Worth a look if you prefer its interface.
+
+The ch57x-2 format was confirmed against
+[soyunomas/macroknob](https://github.com/soyunomas/macroknob) (MIT), an
+independent Go implementation researched with the hardware. And
+[EScripts-content/mini-3key-configurator](https://github.com/EScripts-content/mini-3key-configurator)
+documents the same device from decompiled *official* software, which describes a
+different format again — the reason this tool has a format selector rather than a
+guess.
 
 The C-to-C cable gotcha comes from
 [IISweetHeartII/brightdata-mini-keypad](https://github.com/IISweetHeartII/brightdata-mini-keypad)

@@ -154,13 +154,51 @@ empty `(0, 0)` press that the reference explains only as *"for whatever reason
 empty key is added before others"*. At most **5 presses**, and **no inter-step
 delay** at all. Keys are 1–12; knob actions start at 13.
 
-Where the two references disagree, this follows `k8890.rs`:
+Where references disagree, this follows `k8890.rs`, which
+[soyunomas/macroknob](https://github.com/soyunomas/macroknob) (MIT, Go,
+independently researched with the hardware) confirms byte for byte:
 
-| | k8890.rs | VMacropad |
+    [0x03, 0xFE, 0x01, 0x01, 0x01]                 start
+    [0x03, slot, 0x11, 0x01, 0x00, 0x00, 0x00]     the empty press
+    [0x03, slot, 0x11, 0x01, 0x01, mod, keycode]   the real press
+    [0x03, 0xAA, 0xAA]                             finish
+
+`0x11` there is `(layer+1) << 4 | kind`, so VMacropad's bare `kind` is the
+outlier. macroknob also confirms slot ids — keys from `0x01`, knob at
+`0x0D`/`0x0E`/`0x0F` — and reports the config endpoint on **interface 1**
+(`0x02 OUT`), not interface 0 as on ch57x-1.
+
+| | k8890.rs / macroknob | VMacropad |
 |---|---|---|
 | keyboard byte 1 | `(layer+1)<<4 \| kind` | `kind` alone |
 | LED sub-command | `0xB0 0x18 <mode>` | `0xB0 0x08 <mode>` |
 | LED finish | `AA A1` | `AA AA` |
+
+### But the vendor software for 8890 uses the ch57x-1 format
+
+[EScripts-content/mini-3key-configurator](https://github.com/EScripts-content/mini-3key-configurator)
+documents `1189:8890` from **decompiled official software** — a C# `FormMain.cs`,
+so a different vendor application from the Qt one behind ch57x-1 — and describes
+something else entirely:
+
+    Report ID 0x03, 65 bytes, UsagePage 0xFF00, Usage 0x0001
+    [0x03, 0xFE, slot, layer, type, delay_lo, delay_hi, 0, 0, 0, count, mod, code, …]
+    type: 0 none, 1 basic, 2 multimedia, 3 mouse, 8 LED
+
+That is the **ch57x-1 layout**, with two differences: the layer is zero-based
+rather than 1-based, and the delay is inline at bytes 5–6 instead of a separate
+type-5 record. It agrees on slot ids (keys from 1, knob 13/14/15) and notes that
+*older firmware reported the knob at 23/24/25*.
+
+So `1189:8890` has two mutually exclusive descriptions, both credible: two
+open-source tools use the `k8890` framing, while the manufacturer's own software
+uses the ch57x-1 framing. The likeliest explanation is firmware variation — the
+23/24/25 note is evidence that these devices are not uniform.
+
+**This tool does not guess.** The format selector in the UI lets you send any
+implemented format to any device, so an 8890 owner can try `ch57x-2` and then
+`ch57x-1` rather than being stuck with one guess. If you own one, please report
+which works.
 
 Because of that LED disagreement — and because this dialect's lighting is
 mode-only with no colour — lighting is left disabled here rather than shipping a

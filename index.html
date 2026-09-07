@@ -303,6 +303,7 @@ dialog h3{font-family:var(--disp);font-size:1.05rem;margin:0;letter-spacing:-.01
         <h2>Layout &mdash; <span id="layoutName">12 keys &middot; 2 knobs</span></h2>
         <div style="display:flex;gap:.6rem;align-items:center;flex-wrap:wrap">
           <select id="layoutPick" title="Keypad model" style="width:auto"></select>
+          <select id="formatPick" title="Which protocol format to send" style="width:auto"></select>
           <select id="orientPick" title="How your keypad is physically placed" style="width:auto"></select>
           <div class="tabs" id="layerTabs" role="tablist"></div>
         </div>
@@ -740,7 +741,8 @@ let profile = loadProfile();
 let layer = 0;
 let sel = null;              // { slot, label }
 let device = null;
-let dialect = IMPLEMENTED_DIALECT;   // set from the device on connect
+let dialect = IMPLEMENTED_DIALECT;   // detected from the device on connect
+let forcedDialect = null;            // user override; see the format selector
 let verified = false;      // device has answered 0xFB with a usable layout
 let captureArmed = false;
 
@@ -825,8 +827,9 @@ function msg(bytes) {
 
 /** All reports needed to program one slot. */
 function bindingReports(slot, b) {
-  if (dialect === "ch57x-2") return ch2Reports(slot, b, layer);
-  if (dialect === "ch57x-3") return ch3Reports(slot, b, layer);
+  const d = forcedDialect || dialect;
+  if (d === "ch57x-2") return ch2Reports(slot, b, layer);
+  if (d === "ch57x-3") return ch3Reports(slot, b, layer);
 
   const head = [CMD_WRITE, slot, layer + 1];
   let m;
@@ -1611,6 +1614,24 @@ async function readAll() {
 /* ==================================================================
    Rendering — device
    ================================================================== */
+/* Sources disagree about what some devices accept — most sharply for 1189:8890,
+   where two open-source tools use the ch57x-2 format while the vendor's own
+   decompiled software uses the ch57x-1 one. Rather than pick blind, let the user
+   try the other. Useful for any future variant too. */
+function renderFormatPick() {
+  const el = $("formatPick");
+  el.textContent = "";
+  const det = `Detected: ${dialect}`;
+  const o = new Option(det, "");
+  if (!forcedDialect) o.selected = true;
+  el.append(o);
+  for (const id of Object.keys(DIALECT_CAPS)) {
+    const opt = new Option(`Force ${id}`, id);
+    if (forcedDialect === id) opt.selected = true;
+    el.append(opt);
+  }
+}
+
 function renderOrientPick() {
   const el = $("orientPick");
   el.textContent = "";
@@ -2154,7 +2175,7 @@ $("fileImport").onchange = async e => {
    Wire-up
    ================================================================== */
 function renderAll() {
-  renderLayoutPick(); renderOrientPick(); renderTabs(); renderGrid();
+  renderLayoutPick(); renderFormatPick(); renderOrientPick(); renderTabs(); renderGrid();
   renderKnobs(); renderLed(); renderEditor();
 }
 
@@ -2168,6 +2189,18 @@ $("btnClearAll").onclick = clearEditor;
 $("btnBlank").onclick = blankKeypad;
 $("btnApplyLed").onclick = applyLed;
 $("btnRepair").onclick = repairIdentity;
+$("formatPick").onchange = e => {
+  forcedDialect = e.target.value || null;
+  const eff = forcedDialect || dialect;
+  log(forcedDialect
+    ? `Forcing the ${forcedDialect} format. Sources disagree about some devices — ` +
+      `if the other format did nothing, this is the one to try.`
+    : `Back to the detected format (${dialect}).`, "w");
+  const caps = DIALECT_CAPS[eff];
+  if (caps && !caps.tested)
+    log(`${eff} is ported and untested. Writing is at your own risk.`, "w");
+  renderAll();
+};
 $("orientPick").onchange = e => {
   setOrientation(e.target.value);
   sel = null;
