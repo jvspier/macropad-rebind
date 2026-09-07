@@ -123,8 +123,8 @@ slot **17**, not 16.
 
 ### ch57x-2 (1189:8890)
 
-Not implemented here, but documented because two independent implementations
-describe it: ch57x-keyboard-tool's `k8890.rs` and
+Ported here from ch57x-keyboard-tool's `k8890.rs` and **not verified against
+hardware**. A second implementation also describes it:
 [visiuun/VMacropad](https://github.com/visiuun/VMacropad) (MIT), a resident
 Python driver that targets this device by default.
 
@@ -140,7 +140,33 @@ rather than a fixed `0xFE` with a slot argument. VMacropad's action ids are
     [0xAA, 0xAA]                      VMacropad names this "save to flash"
     [0xA1, layer]                     **select the active layer**
 
-Two of those are new information.
+**As implemented here**, following `k8890.rs`:
+
+    [0xFE, layer+1, 0x01, 0x01, 0, 0, 0, 0]        start, before every binding
+    [slot, (layer+1)<<4 | kind, count, index, mod, code, 0, 0]   one per press
+    [slot, (layer+1)<<4 | 0x02, low, high, 0, 0, 0, 0]           media
+    [slot, (layer+1)<<4 | 0x03, buttons, dx, dy, wheel, mod, 0]  mouse
+    [0xAA, 0xAA, 0, 0, 0, 0, 0, 0]                 finish, no FD FE FF
+
+The layer sits in the **high nibble** of byte 1, with the macro kind in the low
+nibble. A keyboard binding is sent as one message per press, preceded by an extra
+empty `(0, 0)` press that the reference explains only as *"for whatever reason
+empty key is added before others"*. At most **5 presses**, and **no inter-step
+delay** at all. Keys are 1–12; knob actions start at 13.
+
+Where the two references disagree, this follows `k8890.rs`:
+
+| | k8890.rs | VMacropad |
+|---|---|---|
+| keyboard byte 1 | `(layer+1)<<4 \| kind` | `kind` alone |
+| LED sub-command | `0xB0 0x18 <mode>` | `0xB0 0x08 <mode>` |
+| LED finish | `AA A1` | `AA AA` |
+
+Because of that LED disagreement — and because this dialect's lighting is
+mode-only with no colour — lighting is left disabled here rather than shipping a
+guess on top of a guess.
+
+Two other commands are new information.
 
 `0xA1 <layer>` **selects the live layer from the host.** That is ch57x-2 only.
 **Tested and rejected on ch57x-1:** `03 A1 00` through `03 A1 03` were sent to a

@@ -392,6 +392,12 @@ dialog h3{font-family:var(--disp);font-size:1.05rem;margin:0;letter-spacing:-.01
       <header><h2>Before you write</h2></header>
       <div class="body stack" style="gap:.8rem">
         <div class="note">
+          <div><b>Programming needs the USB cable.</b> If your keypad also does Bluetooth, that is for
+          <em>using</em> it, not configuring it — the configuration interface only exists over USB. Set it up
+          wired, then unplug and go wireless if you like; the keypad remembers its bindings. (In Bluetooth mode
+          it also turns the backlight off to save battery.)</div>
+        </div>
+        <div class="note">
           <div><b>One write, all three layers.</b> Writing sends every binding you have set, layer by layer, then the backlight for each layer. Slots you never touched are left alone.</div>
         </div>
         <p class="hint">Bindings are kept in this browser under <code>localStorage</code>, so the page remembers them. That is a convenience, not a backup — use <b>Export</b> for anything you care about.</p>
@@ -465,8 +471,9 @@ const IMPLEMENTED_DIALECT = "ch57x-1";
    command, so lighting, read-back, write verification, blanking and identity
    repair are all unavailable there — it can only be written to, blind. */
 const DIALECT_CAPS = {
-  "ch57x-1": { write: true,  read: true,  led: true,  maxKeys: 15, knobBase: 16, tested: true  },
-  "ch57x-3": { write: true,  read: false, led: false, maxKeys: 16, knobBase: 17, tested: false },
+  "ch57x-1": { write: true, read: true,  led: true,  maxKeys: 15, knobBase: 16, maxSteps: 18, delay: true,  tested: true  },
+  "ch57x-2": { write: true, read: false, led: false, maxKeys: 12, knobBase: 13, maxSteps: 5,  delay: false, tested: false },
+  "ch57x-3": { write: true, read: false, led: false, maxKeys: 16, knobBase: 17, maxSteps: 18, delay: true,  tested: false },
 };
 
 function modelFor(vid, pid) {
@@ -598,6 +605,9 @@ const KNOB_GLYPH   = { ccw:"↺", press:"●", cw:"↻" };
    Knob 0 is the physically LEFT knob and knob 1 the right — verified on
    hardware, and not something you can infer from a config where both are
    bound to volume. Actions run ccw, press, cw. */
+const stepLimit = () => DIALECT_CAPS[dialect]?.maxSteps ?? MAX_STEPS;
+const delayOK   = () => DIALECT_CAPS[dialect]?.delay !== false;
+
 const keySlot  = i => i + 1;
 const knobSlot = (k, a, d) => (DIALECT_CAPS[d || dialect]?.knobBase ?? 16) + 3 * k + a;
 
@@ -815,6 +825,7 @@ function msg(bytes) {
 
 /** All reports needed to program one slot. */
 function bindingReports(slot, b) {
+  if (dialect === "ch57x-2") return ch2Reports(slot, b, layer);
   if (dialect === "ch57x-3") return ch3Reports(slot, b, layer);
 
   const head = [CMD_WRITE, slot, layer + 1];
@@ -869,6 +880,59 @@ function bindingReports(slot, b) {
   reports.push(msg([CMD_COMMIT, 0xFE, 0xFF]));
   reports.push(msg([CMD_SEP, CMD_SEP]));
   return reports;
+}
+
+/* ------------------------------------------------------------------
+   ch57x-2 encoder (1189:8890), ported from ch57x-keyboard-tool's
+   src/keyboard/k8890.rs.
+
+   Different again from both other dialects:
+     - a "start key binding" preamble precedes every binding
+     - the layer lives in the HIGH nibble of byte 1, with the macro
+       kind in the low nibble
+     - a keyboard binding is sent as one message per press, with an
+       extra empty (0, 0) press prepended for reasons nobody records
+     - at most 5 presses, and no inter-step delay at all
+     - keys are 1..12 and knob actions start at 13
+     - finish is a single AA AA, no FD FE FF commit
+
+   NOT verified against hardware. Where the two available references
+   disagree this follows k8890.rs, the more widely used one; the
+   divergences are listed in docs/PROTOCOL.md.
+   ------------------------------------------------------------------ */
+const CH2_MAX_PRESSES = 5;
+
+function ch2Reports(slot, b, layerIdx) {
+  const L = layerIdx + 1;
+  const out = [msg([CMD_WRITE, L, 0x01, 0x01, 0, 0, 0, 0])];   // start
+
+  if (b.type === "key") {
+    if (b.steps.length > CH2_MAX_PRESSES)
+      throw new Error(`too long for this device: ${b.steps.length} presses, ${CH2_MAX_PRESSES} max`);
+    if (b.delay > 0)
+      throw new Error("inter-step delay is not supported on this device");
+    const items = [[0, 0], ...b.steps.map(st => [st.mods & 0xff, st.code || 0])];
+    items.forEach(([mods, code], i) =>
+      out.push(msg([slot, (L << 4) | TYPE_KEYBOARD, b.steps.length, i, mods, code, 0, 0])));
+
+  } else if (b.type === "media") {
+    const c = b.media & 0xffff;
+    out.push(msg([slot, (L << 4) | TYPE_MEDIA, c & 0xff, (c >> 8) & 0xff, 0, 0, 0, 0]));
+
+  } else if (b.type === "mouse") {
+    const mod = b.mod || 0, btn = b.buttons || 0;
+    let p;
+    if (b.action === "click")      p = [btn, 0, 0, 0, mod, 0];
+    else if (b.action === "wheel") p = [0, 0, 0, i8(b.wheel), mod, 0];
+    else if (b.action === "move")  p = [0, i8(b.dx), i8(b.dy), 0, mod, 0];
+    else                           p = [btn, i8(b.dx), i8(b.dy), 0, mod, 0];   // drag
+    out.push(msg([slot, (L << 4) | TYPE_MOUSE, ...p]));
+
+  } else {
+    return [];
+  }
+  out.push(msg([CMD_SEP, CMD_SEP, 0, 0, 0, 0, 0, 0]));
+  return out;
 }
 
 /* ------------------------------------------------------------------
@@ -1817,13 +1881,13 @@ function renderKeyEditor(host, b) {
   const addText = () => {
     const { steps, skipped, truncated } = textToSteps(txt.value);
     if (!steps.length) { log("Nothing in that text could be typed.", "w"); return; }
-    const room = MAX_STEPS - b.steps.length;
+    const room = stepLimit() - b.steps.length;
     if (room <= 0) { log(`Sequence is already full (${MAX_STEPS} steps).`, "w"); return; }
     touch(b);
     b.steps.push(...steps.slice(0, room));
     if (skipped.length) log(`Skipped ${skipped.length} character(s) with no US-layout key: ${skipped.join(" ")}`, "w");
     if (steps.length > room || truncated)
-      log(`Only the first ${room} character(s) fitted — ${MAX_STEPS} steps per key is this tool's cap.`, "w");
+      log(`Only the first ${room} character(s) fitted — ${stepLimit()} steps per key on this device.`, "w");
     txt.value = "";
     saveProfile();
     renderAll();
@@ -1876,7 +1940,7 @@ function renderKeyEditor(host, b) {
   // ---- sequence ----
   const seqField = document.createElement("div");
   seqField.className = "field";
-  seqField.innerHTML = `<span class="legend">Sequence — ${b.steps.length}/${MAX_STEPS}</span>`;
+  seqField.innerHTML = `<span class="legend">Sequence — ${b.steps.length}/${stepLimit()}</span>`;
   const list = document.createElement("div");
   list.className = "steps";
   if (!b.steps.length) {
@@ -1908,10 +1972,13 @@ function renderKeyEditor(host, b) {
 
   const dField = document.createElement("div");
   dField.className = "field";
-  dField.innerHTML = `<label for="delay">Delay between steps (ms, 0–6000)</label>`;
+  dField.innerHTML = delayOK()
+    ? `<label for="delay">Delay between steps (ms, 0–6000)</label>`
+    : `<label for="delay">Delay between steps — not supported on this device</label>`;
   const d = document.createElement("input");
   d.type = "number"; d.id = "delay"; d.min = "0"; d.max = "6000"; d.step = "10";
   d.value = String(b.delay || 0);
+  d.disabled = !delayOK();
   d.oninput = () => {
     touch(b);
     b.delay = Math.max(0, Math.min(6000, Number(d.value) || 0));
@@ -1924,7 +1991,9 @@ function renderKeyEditor(host, b) {
 function addStep(b, mods, code) {
   if (!mods && !code) return;
   touch(b);
-  if (b.steps.length >= MAX_STEPS) { log("Sequence is full (18 steps).", "w"); return; }
+  if (b.steps.length >= stepLimit()) {
+    log(`Sequence is full (${stepLimit()} steps on this device).`, "w"); return;
+  }
   b.steps.push({ mods, code });
   b._mods = 0;
   saveProfile();

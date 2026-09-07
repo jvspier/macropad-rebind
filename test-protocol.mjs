@@ -22,13 +22,13 @@ const core = js.slice(
 
 const mod = await import(
   "data:text/javascript;base64," +
-  Buffer.from(core + "\nexport {bindingReports, ledReports, keySlot, knobSlot, decodeRecord, touch, emptyReports, variantReport, DEVICE_VARIANTS, textToSteps, diffProfiles, blankProfile, LAYOUTS, findLayout, gridOrder, posOfSlot, DEFAULT_LAYOUT, VENDOR_IDS, MODELS, modelFor, IMPLEMENTED_DIALECT, ch3Reports, DIALECT_CAPS, displayGrid, knobOrder, ORIENTATIONS, MEDIA};\n").toString("base64")
+  Buffer.from(core + "\nexport {bindingReports, ledReports, keySlot, knobSlot, decodeRecord, touch, emptyReports, variantReport, DEVICE_VARIANTS, textToSteps, diffProfiles, blankProfile, LAYOUTS, findLayout, gridOrder, posOfSlot, DEFAULT_LAYOUT, VENDOR_IDS, MODELS, modelFor, IMPLEMENTED_DIALECT, ch3Reports, DIALECT_CAPS, displayGrid, knobOrder, ORIENTATIONS, MEDIA, ch2Reports};\n").toString("base64")
 );
 const { bindingReports, ledReports, keySlot, knobSlot, decodeRecord, touch,
         emptyReports, variantReport, DEVICE_VARIANTS, textToSteps, diffProfiles,
         blankProfile, LAYOUTS, findLayout, gridOrder, posOfSlot, DEFAULT_LAYOUT,
         VENDOR_IDS, MODELS, modelFor, IMPLEMENTED_DIALECT, ch3Reports,
-        DIALECT_CAPS, displayGrid, knobOrder, ORIENTATIONS, MEDIA } = mod;
+        DIALECT_CAPS, displayGrid, knobOrder, ORIENTATIONS, MEDIA, ch2Reports } = mod;
 
 let pass = 0, fail = 0;
 const hx = a => Array.from(a, b => b.toString(16).padStart(2, "0")).join(" ");
@@ -564,6 +564,58 @@ console.log("\nmedia usages");
   const r = bindingReports(1, { type: "media", media: 0x227 })[0];
   eq("0x227 low byte",  r[10], 0x27);
   eq("0x227 high byte", r[11], 0x02);
+}
+
+
+console.log("\nch57x-2 encoder (1189:8890) — ported, NOT hardware-verified");
+{
+  // Asserted against ch57x-keyboard-tool's k8890.rs, read line by line.
+  // A binding is a preamble, one message per press with an empty one first,
+  // then a single AA AA. The layer sits in the HIGH nibble of byte 1.
+  let r = ch2Reports(1, { type: "key", steps: [{ mods: 0x01, code: 0x04 }], delay: 0 }, 0);
+  eq("preamble + empty + 1 press + finish = 4", r.length, 4);
+  check("start preamble", r[0], [0x03, 0xfe, 0x01, 0x01, 0x01]);
+  check("  the prepended empty press", r[1], [0x03, 0x01, 0x11, 0x01, 0x00, 0x00, 0x00]);
+  check("  ctrl-a",                    r[2], [0x03, 0x01, 0x11, 0x01, 0x01, 0x01, 0x04]);
+  check("  finish is AA AA only",      r[3], [0x03, 0xaa, 0xaa]);
+
+  // Layer 3 must land in the high nibble: (3+1) << 4 | 1 = 0x41.
+  r = ch2Reports(1, { type: "key", steps: [{ mods: 0, code: 0x04 }], delay: 0 }, 2);
+  eq("layer 3 encodes as 0x31", r[2][1], 0x31);
+  eq("  preamble carries layer 3", r[0][1], 0x03);
+
+  // Media: code split little-endian straight after the type byte.
+  r = ch2Reports(2, { type: "media", media: 0xe9 }, 0);
+  check("volume up", r[1], [0x03, 0x02, 0x12, 0xe9, 0x00]);
+
+  // Mouse variants sit at different offsets from every other dialect.
+  check("left click", ch2Reports(3, { type:"mouse", action:"click", buttons:1, mod:0 }, 0)[1],
+        [0x03, 0x03, 0x13, 0x01, 0, 0, 0, 0, 0]);
+  check("wheel +3",   ch2Reports(3, { type:"mouse", action:"wheel", wheel:3, mod:0 }, 0)[1],
+        [0x03, 0x03, 0x13, 0, 0, 0, 0x03, 0, 0]);
+  check("move 10,-5", ch2Reports(3, { type:"mouse", action:"move", dx:10, dy:-5, mod:0 }, 0)[1],
+        [0x03, 0x03, 0x13, 0, 0x0a, 0xfb, 0, 0, 0]);
+
+  // This dialect is much more limited, and both limits must be enforced.
+  let threw = false;
+  try { ch2Reports(1, { type:"key", delay:0,
+    steps: Array.from({length: 6}, () => ({ mods:0, code:0x04 })) }, 0); } catch { threw = true; }
+  eq("6 presses rejected (5 max)", threw, true);
+  threw = false;
+  try { ch2Reports(1, { type:"key", delay:100, steps:[{ mods:0, code:0x04 }] }, 0); } catch { threw = true; }
+  eq("delay rejected", threw, true);
+
+  // Slots: 12 keys, knobs from 13.
+  eq("ch57x-2 knob 1 ccw", knobSlot(0, 0, "ch57x-2"), 13);
+  eq("ch57x-2 knob 3 cw",  knobSlot(2, 2, "ch57x-2"), 21);
+  eq("ch57x-2 caps: 12 keys", DIALECT_CAPS["ch57x-2"].maxKeys, 12);
+  eq("ch57x-2 caps: 5 steps", DIALECT_CAPS["ch57x-2"].maxSteps, 5);
+  eq("ch57x-2 caps: no delay", DIALECT_CAPS["ch57x-2"].delay, false);
+  eq("ch57x-2 caps: untested", DIALECT_CAPS["ch57x-2"].tested, false);
+
+  // All three dialects must now have an encoder.
+  eq("every known dialect is implemented",
+     MODELS.every(m => !!DIALECT_CAPS[m.dialect]), true);
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);

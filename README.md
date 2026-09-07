@@ -66,9 +66,11 @@ right HID interface, and the log prints the id so it can be added.
 >   on this dialect, so nothing can be verified, and no backlight command is known.
 >   You must pick your model from the Layout dropdown, since the device cannot be
 >   asked. The tool spells all of this out when you connect.
-> - **ch57x-2** — `1189:8890`. Not implemented; writing is refused. Its command set
-  *is* now documented, from two independent implementations — see the protocol
-  doc. Reported hardware is 6 keys + 1 knob, 3×2, single layer.
+> - **ch57x-2** — `1189:8890`. Supported, **ported and untested**, from
+  ch57x-keyboard-tool's `k8890.rs`. This dialect is more limited: at most **5
+  presses** per key, **no inter-step delay**, no read command, and its backlight
+  model differs enough that lighting is disabled. Keys are 1–12 with knobs from
+  13. Reported hardware is 6 keys + 1 knob, 3×2, single layer.
 >
 > See [docs/PROTOCOL.md](docs/PROTOCOL.md#not-one-protocol--three-dialects).
 
@@ -211,6 +213,11 @@ nothing tells you why.
 > has no binding for, so bindings already on the keypad that you have not loaded
 > are left exactly as they are. Use **Read from keypad** first if you want to see
 > and edit them, or **Blank this layer** if you want them gone.
+
+> **Programming needs the USB cable.** If your keypad also does Bluetooth, that
+> is for *using* it, not configuring it — the configuration interface only exists
+> over USB. Set it up wired, then unplug and go wireless if you like; the keypad
+> remembers. (In Bluetooth mode it turns the backlight off to save battery.)
 
 > **Layers are switched on the keypad**, with the button on its edge — not from
 > this page. The indicator LEDs beside the knobs show which layer is live. If a
