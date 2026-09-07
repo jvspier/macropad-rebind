@@ -311,6 +311,20 @@ were ruled out:
 | RGB triplets in the 38 spare record bytes (12 keys × 3 fits) | no effect |
 | The shock/shock2 animations being multi-hue | monochrome, both directions |
 
+And the vendor software has no path for it either, which settles the question.
+The 2023 build contains `pushButton_K1_BK` through `K15_BK` — per-key backlight
+buttons, one per key. It looks exactly like per-key colour support. Those strings
+are referenced in precisely one function, `Ui_Widget::setupUi`, which is where Qt
+assigns object names. **No handler reads them.** They are inert widgets. The only
+LED function in the binary is `SetRgb_Led_Key(int)`, whose argument indexes the
+mode/colour palette rather than a key, and which writes one byte into the single
+global LED record.
+
+So per-key colour is **absent from this firmware generation**, not merely
+undiscovered. The 2025 build extends those buttons to `K27_BK` and grows the
+palette from 7 entries to 25, but that belongs to later hardware — this firmware
+decodes four bits of colour and only values 1–7, measured.
+
 ### Why a pad can still show several colours at once
 
 The firmware drives LEDs individually — mode 4 lights exactly one key, and the
