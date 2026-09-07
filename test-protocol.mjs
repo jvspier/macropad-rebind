@@ -428,6 +428,8 @@ console.log("\nprotocol dialects");
   eq("we implement ch57x-1", IMPLEMENTED_DIALECT, "ch57x-1");
   const other = MODELS.filter(m => m.dialect !== IMPLEMENTED_DIALECT);
   eq("  2 models need a dialect we do not have", other.length, 2);
+  eq("1189:8851 (from the 2025 vendor build)", modelFor(0x1189, 0x8851).dialect, "ch57x-1");
+  eq("  7 models total", MODELS.length, 7);
   // Every model's vendor must be one the picker will offer, or it is unreachable.
   eq("every model's vendor is in the filter",
      MODELS.every(m => VENDOR_IDS.includes(m.vid)), true);

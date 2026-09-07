@@ -47,8 +47,9 @@ with one to three knurled knobs along the top.
 | macOS | System Information → USB |
 | Windows | Device Manager → Properties → Details → Hardware Ids |
 
-Supported product ids: **`8830`, `8831`, `8832`, `8833`, `8840`, `8842`, `8850`**,
-under vendor **`1189`** or **`514c`** — the same manufacturer ships under both.
+Supported product ids: **`8830`, `8831`, `8832`, `8833`, `8840`, `8842`, `8850`,
+`8851`**, under vendor **`1189`** or **`514c`** — the same manufacturer ships under
+both.
 
 If your pad has some other vendor id, press **Device not listed?** instead of
 **Connect keypad**. That drops the vendor filter and offers any device with the

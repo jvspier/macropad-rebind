@@ -87,6 +87,23 @@ The mapping comes from
 [ch57x-keyboard-tool](https://github.com/kriomant/ch57x-keyboard-tool)'s
 `SUPPORTED_DEVICES` table, which has separate implementations per dialect.
 
+### What the vendor software tells us
+
+Two builds of the vendor application were examined. Their device tables, decoded
+straight out of `.data`:
+
+    2023 build:  8842 8840 8830 8831 8832 8833 8850         vendor 1189
+    2025 build:  8842 8840 8830 8831 8832 8833 8850 8851    vendor 1189
+
+So `8851` is a supported product the earlier build did not know about, and — the
+useful part — **neither build supports vendor `0x514C` at all.** The vendor
+software handles all of its devices through one code path, which is good evidence
+that every `1189:88xx` product above speaks ch57x-1.
+
+It also means the vendor application cannot be a source for the ch57x-3 dialect.
+`514C` devices ship with different software, and the only public description of
+that dialect is ch57x-keyboard-tool's implementation.
+
 ## Commands
 
 | Byte 0 | Meaning |

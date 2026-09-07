@@ -10,4 +10,4 @@
 # MUST be numbered below 70. systemd's 70-uaccess.rules is what acts on the
 # uaccess tag; a rule that adds the tag later than that is silently ignored.
 KERNEL=="hidraw*", SUBSYSTEMS=="usb", ATTRS{idVendor}=="1189|514c", \
-  ATTRS{idProduct}=="8830|8831|8832|8833|8840|8842|8850", TAG+="uaccess"
+  ATTRS{idProduct}=="8830|8831|8832|8833|8840|8842|8850|8851", TAG+="uaccess"
