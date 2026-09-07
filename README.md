@@ -66,7 +66,9 @@ right HID interface, and the log prints the id so it can be added.
 >   on this dialect, so nothing can be verified, and no backlight command is known.
 >   You must pick your model from the Layout dropdown, since the device cannot be
 >   asked. The tool spells all of this out when you connect.
-> - **ch57x-2** — `1189:8890`. Not implemented; writing is refused.
+> - **ch57x-2** — `1189:8890`. Not implemented; writing is refused. Its command set
+  *is* now documented, from two independent implementations — see the protocol
+  doc. Reported hardware is 6 keys + 1 knob, 3×2, single layer.
 >
 > See [docs/PROTOCOL.md](docs/PROTOCOL.md#not-one-protocol--three-dialects).
 

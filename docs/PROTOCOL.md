@@ -121,6 +121,42 @@ than imply the same confidence it has on ch57x-1.
 Slot numbering differs too — 16 keys rather than 15, so knob actions begin at
 slot **17**, not 16.
 
+### ch57x-2 (1189:8890)
+
+Not implemented here, but documented because two independent implementations
+describe it: ch57x-keyboard-tool's `k8890.rs` and
+[visiuun/VMacropad](https://github.com/visiuun/VMacropad) (MIT), a resident
+Python driver that targets this device by default.
+
+Same 65-byte framing and report id `0x03`, but the command byte is **per key**
+rather than a fixed `0xFE` with a slot argument. VMacropad's action ids are
+`[1, 2, 3, 13, 15, 14]` — three keys, then three knob actions.
+
+    [action, 1, 1, 0, mod, 0]         key, first of two messages
+    [action, 1, 1, 1, mod, code]      key, second
+    [action, 2, low, high]            media
+    [action, 3, button, 0, 0, wheel, mod]   mouse
+    [0xB0, 0x08, mode]                LED — 0xB0 is the command itself here
+    [0xAA, 0xAA]                      VMacropad names this "save to flash"
+    [0xA1, layer]                     **select the active layer**
+
+Two of those are new information.
+
+`0xA1 <layer>` **selects the live layer from the host.** No such command is known
+for ch57x-1 — the two `0xA1` constants in the ch57x-1 vendor binary are in
+`Widget::Widget()`, so they are UI values, not protocol. Whether ch57x-1 honours
+`0xA1` anyway is untested.
+
+And `0xAA 0xAA`, which ch57x-keyboard-tool treats as an opaque separator, is a
+**flash commit** in VMacropad's naming. That is a better mental model for why
+ch57x-1 sends it around `FD FE FF`, though the exact semantics there are still
+unconfirmed.
+
+Reported hardware for this dialect: 6 keys and 1 knob in a 3×2 grid, and
+**single-layer — no layer button on the case** ([johnnyhuy's
+config](https://github.com/johnnyhuy/ch57x-keyboard)). That independently matches
+the 6+1 grid inferred in the table above.
+
 ### What the vendor software tells us
 
 Two builds of the vendor application were examined. Their device tables, decoded
