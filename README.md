@@ -59,27 +59,20 @@ If your pad has some other vendor id, press **Device not listed?** instead of
 **Connect keypad**. That drops the vendor filter and offers any device with the
 right HID interface, and the log prints the id so it can be added.
 
-> **Not every model speaks the same protocol.** Three dialects exist:
+> **Not every model takes the same commands.** Three command formats exist and
+> the right one is chosen automatically from your keypad's USB id. You should
+> never have to think about this — but if your keys do not respond after writing,
+> a dropdown appears next to the model picker that sends a different format.
 >
-> - **ch57x-1** — `1189:8840`, `1189:8842`, `1189:8850`, `1189:8851`, `514c:8851`.
->   Fully supported and verified on hardware.
-> - **ch57x-3** — `514c:8850` (note it shares a product id with `1189:8850` and is
->   *not* the same protocol). Supported, but **ported from
->   [ch57x-keyboard-tool](https://github.com/kriomant/ch57x-keyboard-tool) and never
->   tested on hardware.** Writing works at your own risk; there is no read command
->   on this dialect, so nothing can be verified, and no backlight command is known.
->   You must pick your model from the Layout dropdown, since the device cannot be
->   asked. The tool spells all of this out when you connect.
-> - **ch57x-2** — `1189:8890`. Supported, **ported and untested**. Sources
-  contradict each other on this device: two open-source tools use the format
-  below, while the manufacturer's own software uses the ch57x-1 one. Use the
-  **format selector** to try both. Ported from
-  ch57x-keyboard-tool's `k8890.rs`. This dialect is more limited: at most **5
-  presses** per key, **no inter-step delay**, no read command, and its backlight
-  model differs enough that lighting is disabled. Keys are 1–12 with knobs from
-  13. Reported hardware is 6 keys + 1 knob, 3×2, single layer.
+> | Your keypad | What to expect |
+> |---|---|
+> | `1189:8840`, `1189:8842`, `1189:8850`, `1189:8851`, `514c:8851` | Everything works. This is the format the tool was built and tested against. |
+> | `1189:8890` | Writing works in principle, but is untested and sources disagree about this model — try both formats. No backlight control, and the tool cannot read the keypad back. |
+> | `514c:8850` | Writing works in principle, but is untested. No backlight control, and no read-back. |
 >
-> See [docs/PROTOCOL.md](docs/PROTOCOL.md#not-one-protocol--three-dialects).
+> "Untested" means the code was written from other people's research and has
+> never been tried on real hardware. It will tell you so when you connect.
+> The gory details are in [docs/PROTOCOL.md](docs/PROTOCOL.md#not-one-protocol--three-dialects).
 
 These are sold as: *3 key macro pad*, *6 key macropad with knob*, *9 key RGB
 keypad*, *12 key macro keyboard with 2 knobs*, *15 key shortcut pad*, *mini

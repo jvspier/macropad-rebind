@@ -303,7 +303,9 @@ dialog h3{font-family:var(--disp);font-size:1.05rem;margin:0;letter-spacing:-.01
         <h2>Layout &mdash; <span id="layoutName">12 keys &middot; 2 knobs</span></h2>
         <div style="display:flex;gap:.6rem;align-items:center;flex-wrap:wrap">
           <select id="layoutPick" title="Keypad model" style="width:auto"></select>
-          <select id="formatPick" title="Which protocol format to send" style="width:auto"></select>
+          <span id="formatWrap" class="hidden" style="display:inline-flex;gap:.4rem;align-items:center">
+            <select id="formatPick" title="Which command format to send" style="width:auto"></select>
+          </span>
           <select id="orientPick" title="How your keypad is physically placed" style="width:auto"></select>
           <div class="tabs" id="layerTabs" role="tablist"></div>
         </div>
@@ -467,6 +469,16 @@ const MODELS = [
   { vid: 0x514C, pid: 0x8850, dialect: "ch57x-3" },
 ];
 const IMPLEMENTED_DIALECT = "ch57x-1";
+
+/* The dialect ids come from another project's source and mean nothing to anyone
+   configuring a keypad. Plain names for the UI; the ids stay in tooltips and in
+   anything meant to be pasted into a bug report. */
+const DIALECT_LABEL = {
+  "ch57x-1": "Standard",
+  "ch57x-2": "Alternative A",
+  "ch57x-3": "Alternative B",
+};
+const dialectName = d => DIALECT_LABEL[d] || d;
 
 /* What each dialect can do. ch57x-3 has no known LED command and no known read
    command, so lighting, read-back, write verification, blanking and identity
@@ -743,6 +755,7 @@ let sel = null;              // { slot, label }
 let device = null;
 let dialect = IMPLEMENTED_DIALECT;   // detected from the device on connect
 let forcedDialect = null;            // user override; see the format selector
+let formatHintShown = false;         // reveal the format selector once it matters
 let verified = false;      // device has answered 0xFB with a usable layout
 let captureArmed = false;
 
@@ -1220,23 +1233,27 @@ async function connect(broad) {
     const caps = DIALECT_CAPS[dialect];
 
     if (!caps) {
-      log(`This is a ${dialect} device and no encoder for it exists here.`, "e");
-      log(`Writing is disabled — sending the wrong dialect would appear to succeed ` +
-          `and change nothing. Please open an issue if you have one of these.`, "w");
+      log(`This keypad speaks a command format this tool does not know how to ` +
+          `write (id: ${dialect}).`, "e");
+      log(`Writing is disabled — sending the wrong format would look like it worked ` +
+          `and change nothing. Please open an issue; a report is all it takes to add it.`, "w");
       renderAll();
       navigator.hid.addEventListener("disconnect", e => { if (e.device === device) disconnected(); });
       return;
     }
 
     if (dialect !== IMPLEMENTED_DIALECT) {
-      log(`${dialect} device — support is ported from ch57x-keyboard-tool and has ` +
-          `NEVER been tested on hardware.`, "w");
-      log(`Writing is enabled, at your own risk. This dialect has no read command, ` +
-          `so nothing can be verified: if a binding does not work, the tool cannot ` +
-          `tell you why.`, "w");
-      if (!caps.led) log(`No backlight command is known for it either — lighting is disabled.`, "w");
-      log(`Pick your model in the Layout dropdown; this dialect cannot be asked.`, "w");
-      log(`Please report what happens at github.com/jvspier/macropad-rebind/issues`, "w");
+      formatHintShown = true;
+      log(`Your keypad speaks a different command format from the one this tool has ` +
+          `been tested against. Support for it was written from other people's ` +
+          `research and has never been tried on real hardware.`, "w");
+      log(`You can still write to it, but at your own risk: this format has no way ` +
+          `to read the keypad back, so nothing can be checked afterwards.`, "w");
+      if (!caps.led) log(`Backlight control is unavailable for it, so those settings are switched off.`, "w");
+      log(`Set your model with the Layout dropdown — this keypad cannot be asked.`, "w");
+      log(`If the keys do not respond after writing, try the other command format ` +
+          `from the dropdown next to the model. Please report either way: ` +
+          `github.com/jvspier/macropad-rebind/issues (format id: ${dialect})`, "w");
     }
 
     if (caps.read) {
@@ -1424,8 +1441,11 @@ async function writeAll() {
     // "the device stored it", and on unfamiliar variants that gap is exactly
     // where the surprises live.
     if (!DIALECT_CAPS[dialect]?.read) {
-      log("This dialect has no read command, so the write cannot be verified. " +
-          "Try the keys and see.", "w");
+      formatHintShown = true;
+      log("This keypad cannot be read back, so the write cannot be checked. Try your " +
+          "keys. If nothing happens, use the command-format dropdown next to the " +
+          "model picker and write again.", "w");
+      renderAll();
       return;
     }
     log("Verifying — reading the configuration back.", "w");
@@ -1444,6 +1464,10 @@ async function writeAll() {
       if (left.length > 12) log(`   ... and ${left.length - 12} more`, "w");
       log("Your keypad is very probably fine — this is the tool failing to confirm, " +
           "not evidence of a fault. Try the keys; they may well work.", "w");
+      formatHintShown = true;
+      log("If they do not work, there is a dropdown next to the model picker that " +
+          "sends a different command format. Some keypads need the other one.", "w");
+      renderAll();
       log("If they do not, a copy of this log in a GitHub issue would help a lot.", "w");
     }
   } catch (err) {
@@ -1621,15 +1645,20 @@ async function readAll() {
 function renderFormatPick() {
   const el = $("formatPick");
   el.textContent = "";
-  const det = `Detected: ${dialect}`;
-  const o = new Option(det, "");
-  if (!forcedDialect) o.selected = true;
-  el.append(o);
+  const auto = new Option(`Command format: automatic (${dialectName(dialect)})`, "");
+  auto.title = `Detected ${dialect} from your keypad's USB id`;
+  if (!forcedDialect) auto.selected = true;
+  el.append(auto);
   for (const id of Object.keys(DIALECT_CAPS)) {
-    const opt = new Option(`Force ${id}`, id);
+    const opt = new Option(`Command format: ${dialectName(id)}`, id);
+    opt.title = id;
     if (forcedDialect === id) opt.selected = true;
     el.append(opt);
   }
+  // Only worth showing once it might actually be needed.
+  const caps = DIALECT_CAPS[forcedDialect || dialect];
+  $("formatWrap").classList.toggle("hidden",
+    !device || (!forcedDialect && caps?.tested !== false && !formatHintShown));
 }
 
 function renderOrientPick() {
@@ -2193,12 +2222,12 @@ $("formatPick").onchange = e => {
   forcedDialect = e.target.value || null;
   const eff = forcedDialect || dialect;
   log(forcedDialect
-    ? `Forcing the ${forcedDialect} format. Sources disagree about some devices — ` +
-      `if the other format did nothing, this is the one to try.`
-    : `Back to the detected format (${dialect}).`, "w");
+    ? `Now sending the "${dialectName(forcedDialect)}" command format (${forcedDialect}). ` +
+      `Write again and try your keys.`
+    : `Back to the automatic choice, "${dialectName(dialect)}".`, "w");
   const caps = DIALECT_CAPS[eff];
   if (caps && !caps.tested)
-    log(`${eff} is ported and untested. Writing is at your own risk.`, "w");
+    log(`This format has never been tested on real hardware — writing is at your own risk.`, "w");
   renderAll();
 };
 $("orientPick").onchange = e => {

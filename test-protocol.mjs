@@ -22,13 +22,13 @@ const core = js.slice(
 
 const mod = await import(
   "data:text/javascript;base64," +
-  Buffer.from(core + "\nexport {bindingReports, ledReports, keySlot, knobSlot, decodeRecord, touch, emptyReports, variantReport, DEVICE_VARIANTS, textToSteps, diffProfiles, blankProfile, LAYOUTS, findLayout, gridOrder, posOfSlot, DEFAULT_LAYOUT, VENDOR_IDS, MODELS, modelFor, IMPLEMENTED_DIALECT, ch3Reports, DIALECT_CAPS, displayGrid, knobOrder, ORIENTATIONS, MEDIA, ch2Reports};\n").toString("base64")
+  Buffer.from(core + "\nexport {bindingReports, ledReports, keySlot, knobSlot, decodeRecord, touch, emptyReports, variantReport, DEVICE_VARIANTS, textToSteps, diffProfiles, blankProfile, LAYOUTS, findLayout, gridOrder, posOfSlot, DEFAULT_LAYOUT, VENDOR_IDS, MODELS, modelFor, IMPLEMENTED_DIALECT, ch3Reports, DIALECT_CAPS, displayGrid, knobOrder, ORIENTATIONS, MEDIA, ch2Reports, DIALECT_LABEL, dialectName};\n").toString("base64")
 );
 const { bindingReports, ledReports, keySlot, knobSlot, decodeRecord, touch,
         emptyReports, variantReport, DEVICE_VARIANTS, textToSteps, diffProfiles,
         blankProfile, LAYOUTS, findLayout, gridOrder, posOfSlot, DEFAULT_LAYOUT,
         VENDOR_IDS, MODELS, modelFor, IMPLEMENTED_DIALECT, ch3Reports,
-        DIALECT_CAPS, displayGrid, knobOrder, ORIENTATIONS, MEDIA, ch2Reports } = mod;
+        DIALECT_CAPS, displayGrid, knobOrder, ORIENTATIONS, MEDIA, ch2Reports, DIALECT_LABEL, dialectName } = mod;
 
 let pass = 0, fail = 0;
 const hx = a => Array.from(a, b => b.toString(16).padStart(2, "0")).join(" ");
@@ -616,6 +616,24 @@ console.log("\nch57x-2 encoder (1189:8890) — ported, NOT hardware-verified");
   // All three dialects must now have an encoder.
   eq("every known dialect is implemented",
      MODELS.every(m => !!DIALECT_CAPS[m.dialect]), true);
+}
+
+
+console.log("\nplain-language naming");
+{
+  // The ch57x-N ids come from another project's internals and mean nothing to
+  // someone configuring a keypad. Every dialect must have a human name, or the
+  // jargon leaks back into the UI.
+  for (const id of Object.keys(DIALECT_CAPS))
+    eq(`${id} has a plain name`, /^[A-Z]/.test(dialectName(id)), true);
+  eq("no plain name is a raw id",
+     Object.keys(DIALECT_CAPS).every(id => dialectName(id) !== id), true);
+  eq("names are distinct",
+     new Set(Object.keys(DIALECT_CAPS).map(dialectName)).size,
+     Object.keys(DIALECT_CAPS).length);
+  eq("the tested one is called Standard", dialectName(IMPLEMENTED_DIALECT), "Standard");
+  // An unknown id must degrade to itself rather than to undefined.
+  eq("unknown id falls back to itself", dialectName("ch57x-9"), "ch57x-9");
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
