@@ -311,6 +311,7 @@ dialog h3{font-family:var(--disp);font-size:1.05rem;margin:0;letter-spacing:-.01
         </div>
       </header>
       <div class="body">
+        <p class="hint hidden" id="formatHint" style="margin-bottom:.8rem"></p>
         <p class="hint" style="margin-bottom:.8rem">
           Layers are switched <b>on the keypad itself</b> — the small button on its left edge. The indicator
           LEDs beside the knobs show which layer is live, and flash once when you press it. The tabs here only
@@ -375,6 +376,22 @@ dialog h3{font-family:var(--disp);font-size:1.05rem;margin:0;letter-spacing:-.01
     </section>
 
     <section class="card">
+      <header><h2>Before you write</h2></header>
+      <div class="body stack" style="gap:.8rem">
+        <div class="note">
+          <div><b>Programming needs the USB cable.</b> If your keypad also does Bluetooth, that is for
+          <em>using</em> it, not configuring it — the configuration interface only exists over USB. Set it up
+          wired, then unplug and go wireless if you like; the keypad remembers its bindings. (In Bluetooth mode
+          it also turns the backlight off to save battery.)</div>
+        </div>
+        <div class="note">
+          <div><b>One write, all three layers.</b> Writing sends every binding you have set, layer by layer, then the backlight for each layer. Slots you never touched are left alone.</div>
+        </div>
+        <p class="hint">Bindings are kept in this browser under <code>localStorage</code>, so the page remembers them. That is a convenience, not a backup — use <b>Export</b> for anything you care about.</p>
+        <p class="hint">This page never sends <code>0xEF</code>, the command that puts the keypad into its bootloader.</p>
+      </div>
+    </section>
+    <section class="card">
       <header><h2>Reset</h2></header>
       <div class="body dz">
         <button id="btnClearAll" class="wide">Clear this layer in the editor</button>
@@ -391,22 +408,6 @@ dialog h3{font-family:var(--disp);font-size:1.05rem;margin:0;letter-spacing:-.01
       </div>
     </section>
 
-    <section class="card">
-      <header><h2>Before you write</h2></header>
-      <div class="body stack" style="gap:.8rem">
-        <div class="note">
-          <div><b>Programming needs the USB cable.</b> If your keypad also does Bluetooth, that is for
-          <em>using</em> it, not configuring it — the configuration interface only exists over USB. Set it up
-          wired, then unplug and go wireless if you like; the keypad remembers its bindings. (In Bluetooth mode
-          it also turns the backlight off to save battery.)</div>
-        </div>
-        <div class="note">
-          <div><b>One write, all three layers.</b> Writing sends every binding you have set, layer by layer, then the backlight for each layer. Slots you never touched are left alone.</div>
-        </div>
-        <p class="hint">Bindings are kept in this browser under <code>localStorage</code>, so the page remembers them. That is a convenience, not a backup — use <b>Export</b> for anything you care about.</p>
-        <p class="hint">This page never sends <code>0xEF</code>, the command that puts the keypad into its bootloader.</p>
-      </div>
-    </section>
   </div>
 </main>
 
@@ -1657,8 +1658,26 @@ function renderFormatPick() {
   }
   // Only worth showing once it might actually be needed.
   const caps = DIALECT_CAPS[forcedDialect || dialect];
-  $("formatWrap").classList.toggle("hidden",
-    !device || (!forcedDialect && caps?.tested !== false && !formatHintShown));
+  const show = !!device && (forcedDialect || caps?.tested === false || formatHintShown);
+  $("formatWrap").classList.toggle("hidden", !show);
+
+  // Explain it in terms of the one identifier a person can actually look up:
+  // the USB id. The ch57x-N names are another project's internal grouping of
+  // message formats — they are not printed on the device, not in the shop
+  // listing, and not derivable from it. Naming them here would look precise
+  // and tell the reader nothing they could act on.
+  const hint = $("formatHint");
+  hint.classList.toggle("hidden", !show);
+  if (show) {
+    const id = device
+      ? `${(device.vendorId||0).toString(16).padStart(4,"0")}:${(device.productId||0).toString(16).padStart(4,"0")}`
+      : "unknown";
+    hint.innerHTML =
+      `<b>Command format.</b> Chosen from your keypad's USB id (<code>${id}</code>). ` +
+      `Not every model of these keypads takes the same commands, and for some there is ` +
+      `no way to tell but to try. <b>If your keys do not respond after writing, pick the ` +
+      `other format above and write again.</b>`;
+  }
 }
 
 function renderOrientPick() {
