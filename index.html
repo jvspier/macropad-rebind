@@ -558,11 +558,43 @@ const CAPTURE = (() => {
   return m;
 })();
 
+/* ------------------------------------------------------------------
+   Modifier names are per-operating-system, though the byte is not.
+
+   HID modifier bit 0x08 is "Left GUI" — the Windows key on Windows,
+   Command on macOS, Super or Meta on Linux. 0x04 is Alt on Windows and
+   Linux but Option on a Mac. The keypad sends the same code regardless;
+   only the label a person recognises differs, so it follows the machine
+   you are configuring from.
+   ------------------------------------------------------------------ */
+function detectPlatform() {
+  const p = navigator.userAgentData?.platform || navigator.platform ||
+            navigator.userAgent || "";
+  if (/mac|iphone|ipad/i.test(p)) return "mac";
+  if (/win/i.test(p))             return "windows";
+  return "other";
+}
+const PLATFORM = detectPlatform();
+
+const MODIFIER_NAMES = {
+  0x04: { windows: "Alt",   mac: "Option",  other: "Alt"   },
+  0x08: { windows: "Win",   mac: "Command", other: "Super" },
+  0x40: { windows: "RAlt",  mac: "ROption", other: "RAlt"  },
+  0x80: { windows: "RWin",  mac: "RCommand",other: "RSuper" },
+};
+const ALL_NAMES = {
+  0x04: "Alt on Windows and Linux, Option on macOS",
+  0x08: "the Windows key, Command on macOS, Super or Meta on Linux",
+  0x40: "right Alt / right Option",
+  0x80: "right Windows key / right Command / right Super",
+};
+const modName = bit => MODIFIER_NAMES[bit]?.[PLATFORM] ?? MODIFIER_NAMES[bit]?.other;
+
 const MODIFIERS = [
   { bit:0x01, label:"Ctrl"  }, { bit:0x02, label:"Shift"  },
-  { bit:0x04, label:"Alt"   }, { bit:0x08, label:"Super"  },
+  { bit:0x04, label:modName(0x04) }, { bit:0x08, label:modName(0x08) },
   { bit:0x10, label:"RCtrl" }, { bit:0x20, label:"RShift" },
-  { bit:0x40, label:"RAlt"  }, { bit:0x80, label:"RSuper" },
+  { bit:0x40, label:modName(0x40) }, { bit:0x80, label:modName(0x80) },
 ];
 
 /* Consumer-page usages. The first block is confirmed against hardware; the
@@ -1981,12 +2013,23 @@ function renderKeyEditor(host, b) {
   const modField = document.createElement("div");
   modField.className = "field";
   modField.innerHTML = `<span class="legend">Modifiers for the next key</span>`;
+  {
+    const note = document.createElement("p");
+    note.className = "hint";
+    note.textContent = `Named for ${PLATFORM === "mac" ? "macOS" : PLATFORM === "windows" ? "Windows" : "Linux"}, ` +
+      `which is what this browser reports. The keypad sends the same code whatever it is plugged into — ` +
+      `${modName(0x08)} is the Windows key, Command and Super all at once.`;
+    modField.append(note);
+  }
   const mods = document.createElement("div");
   mods.className = "mods";
   for (const m of MODIFIERS) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.textContent = m.label;
+    btn.title = ALL_NAMES[m.bit]
+      ? `${ALL_NAMES[m.bit]} — one key, named differently per system (HID bit 0x${m.bit.toString(16).padStart(2,"0")})`
+      : `HID modifier bit 0x${m.bit.toString(16).padStart(2,"0")}`;
     btn.setAttribute("aria-pressed", (b._mods & m.bit) ? "true" : "false");
     btn.onclick = () => { b._mods ^= m.bit; renderEditor(); };
     mods.append(btn);

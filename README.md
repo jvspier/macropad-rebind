@@ -231,8 +231,11 @@ once written, the keypad works on any computer with no software at all.
 
 ## What you can bind
 
-**Keyboard** — any key, with any combination of Ctrl / Shift / Alt / Super, left
-or right. Two ways to enter it:
+**Keyboard** — any key, with any combination of Ctrl, Shift, Alt and the GUI key,
+left or right. That last one is labelled for whichever system you are configuring
+from — **Win** on Windows, **Command** on macOS, **Super** on Linux — because it
+is a single HID code with three names. The keypad sends the same byte wherever it
+is plugged in. Two ways to enter it:
 
 - Click the capture box and **press the shortcut you want**. It is read from
   your real keyboard and converted.

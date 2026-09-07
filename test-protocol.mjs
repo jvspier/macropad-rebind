@@ -22,13 +22,13 @@ const core = js.slice(
 
 const mod = await import(
   "data:text/javascript;base64," +
-  Buffer.from(core + "\nexport {bindingReports, ledReports, keySlot, knobSlot, decodeRecord, touch, emptyReports, variantReport, DEVICE_VARIANTS, textToSteps, diffProfiles, blankProfile, LAYOUTS, findLayout, gridOrder, posOfSlot, DEFAULT_LAYOUT, VENDOR_IDS, MODELS, modelFor, IMPLEMENTED_DIALECT, ch3Reports, DIALECT_CAPS, displayGrid, knobOrder, ORIENTATIONS, MEDIA, ch2Reports, DIALECT_LABEL, dialectName};\n").toString("base64")
+  Buffer.from(core + "\nexport {bindingReports, ledReports, keySlot, knobSlot, decodeRecord, touch, emptyReports, variantReport, DEVICE_VARIANTS, textToSteps, diffProfiles, blankProfile, LAYOUTS, findLayout, gridOrder, posOfSlot, DEFAULT_LAYOUT, VENDOR_IDS, MODELS, modelFor, IMPLEMENTED_DIALECT, ch3Reports, DIALECT_CAPS, displayGrid, knobOrder, ORIENTATIONS, MEDIA, ch2Reports, DIALECT_LABEL, dialectName, MODIFIER_NAMES, MODIFIERS, modName};\n").toString("base64")
 );
 const { bindingReports, ledReports, keySlot, knobSlot, decodeRecord, touch,
         emptyReports, variantReport, DEVICE_VARIANTS, textToSteps, diffProfiles,
         blankProfile, LAYOUTS, findLayout, gridOrder, posOfSlot, DEFAULT_LAYOUT,
         VENDOR_IDS, MODELS, modelFor, IMPLEMENTED_DIALECT, ch3Reports,
-        DIALECT_CAPS, displayGrid, knobOrder, ORIENTATIONS, MEDIA, ch2Reports, DIALECT_LABEL, dialectName } = mod;
+        DIALECT_CAPS, displayGrid, knobOrder, ORIENTATIONS, MEDIA, ch2Reports, DIALECT_LABEL, dialectName, MODIFIER_NAMES, MODIFIERS, modName } = mod;
 
 let pass = 0, fail = 0;
 const hx = a => Array.from(a, b => b.toString(16).padStart(2, "0")).join(" ");
@@ -634,6 +634,32 @@ console.log("\nplain-language naming");
   eq("the tested one is called Standard", dialectName(IMPLEMENTED_DIALECT), "Standard");
   // An unknown id must degrade to itself rather than to undefined.
   eq("unknown id falls back to itself", dialectName("ch57x-9"), "ch57x-9");
+}
+
+
+console.log("\nmodifier names are per-platform, the byte is not");
+{
+  // HID bit 0x08 is one key with three names. Calling it "Super" everywhere
+  // shows Windows users a word that is on none of their keys.
+  eq("0x08 on Windows",  MODIFIER_NAMES[0x08].windows, "Win");
+  eq("0x08 on macOS",    MODIFIER_NAMES[0x08].mac,     "Command");
+  eq("0x08 elsewhere",   MODIFIER_NAMES[0x08].other,   "Super");
+  eq("0x04 on macOS",    MODIFIER_NAMES[0x04].mac,     "Option");
+  eq("0x04 on Windows",  MODIFIER_NAMES[0x04].windows, "Alt");
+
+  // Naming must never change the wire value.
+  eq("still 8 modifiers", MODIFIERS.length, 8);
+  eq("  bits are the standard HID mask",
+     MODIFIERS.map(m => m.bit).join(","), "1,2,4,8,16,32,64,128");
+  eq("  every one has a label", MODIFIERS.every(m => !!m.label), true);
+  // Ctrl and Shift are the same word everywhere, so they are not renamed.
+  eq("Ctrl is not platform-specific", MODIFIER_NAMES[0x01], undefined);
+  eq("Shift is not platform-specific", MODIFIER_NAMES[0x02], undefined);
+  // A binding built with the GUI bit must still encode 0x08 whatever it is called.
+  const r = bindingReports(1, { type: "key", delay: 0,
+    steps: [{ mods: 0x08, code: 0x0f }] })[0];
+  eq("GUI+L still encodes as 0x08", r[10], 0x08);
+  eq("  with keycode L", r[11], 0x0f);
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
