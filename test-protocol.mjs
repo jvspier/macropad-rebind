@@ -230,7 +230,7 @@ console.log("\ndevice variant (0xFC)");
 // 0xFC is NOT a lighting command: low byte is the key count, high byte the
 // knob count. Sending the wrong pair makes the firmware drive the wrong
 // number of keys. Confirmed on hardware, and confirmed recoverable.
-eq("15 variants known", DEVICE_VARIANTS.length, 15);
+eq("16 variants known", DEVICE_VARIANTS.length, 16);
 check("this keypad: 12 keys, 2 knobs", variantReport(12, 2), [0x03,0xfc,0xfc,0x0c,0x02]);
 check("3 keys, 1 knob",                variantReport(3, 1),  [0x03,0xfc,0xfc,0x03,0x01]);
 check("15 keys, 3 knobs",              variantReport(15, 3), [0x03,0xfc,0xfc,0x0f,0x03]);

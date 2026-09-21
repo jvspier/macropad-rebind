@@ -103,6 +103,7 @@ marked confirmed, or corrected.
 |---:|---:|:---:|:---|
 | — | 1 | — | — |
 | — | 2 | — | — |
+| 1 | 0 | 1×1 | — |
 | 2 | 0 | 2×1 | — |
 | 3 | 0 | 3×1 | — |
 | 3 | 1 | 3×1 | — |
@@ -116,7 +117,8 @@ marked confirmed, or corrected.
 | 9 | 2 | 3×3 | — |
 | 9 | 3 | 3×3 | — |
 | 11 | 3 | 4×3 | — |
-| 12 | 2 | 3×4 | ✅ yes |
+| 12 | 2 | 3×4 | yes — the unit this tool was written against |
+| 12 | 4 | 3×4 | yes — SikaiCase 1189:8842, reported by @geniosid |
 | 12 | 3 | 4×3 | — |
 | 15 | 3 | 5×3 | — |
 | 16 | 0 | 4×4 | — |

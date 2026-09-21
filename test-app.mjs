@@ -54,9 +54,27 @@ const mkEl = () => {
   });
   return t;
 };
+// Controls that start disabled in the page must start disabled here too.
+// Without this the mock hands back an enabled button no matter what, so a
+// connect path that fails to enable one still looks like success — which is
+// exactly how a regression that disabled writing on 4-encoder pads slipped
+// past a green suite.
+const initiallyDisabled = new Set(
+  [...html.matchAll(/<(?:button|input|select)[^>]*>/g)]
+    .filter(m => /\bdisabled\b/.test(m[0]))
+    .map(m => /\bid="([^"]+)"/.exec(m[0])?.[1])
+    .filter(Boolean));
+
 const registry = new Map();
 const document = {
-  getElementById(id) { if (!registry.has(id)) registry.set(id, mkEl()); return registry.get(id); },
+  getElementById(id) {
+    if (!registry.has(id)) {
+      const e = mkEl();
+      e.disabled = initiallyDisabled.has(id);
+      registry.set(id, e);
+    }
+    return registry.get(id);
+  },
   createElement: mkEl,
   createTextNode(t) { const e = mkEl(); e.textContent = String(t); return e; },
   addEventListener() {},
@@ -80,7 +98,7 @@ const windowStub = { addEventListener() {} };
    Records are stored keyed by (layer, slot). The write message and the read
    reply share one layout — only byte 0 differs, 0xFE vs 0xFA — so replaying a
    stored write means swapping that byte and nothing else. */
-function makeDevice({ keys = 12, knobs = 2, pid = 0x8842 } = {}) {
+function makeDevice({ keys = 12, knobs = 2, pid = 0x8842, knobSlotList = null } = {}) {
   const listeners = [];
   const sent = [];
   const config = new Map();          // "layer:slot" -> 64 bytes, read-reply form
@@ -93,7 +111,9 @@ function makeDevice({ keys = 12, knobs = 2, pid = 0x8842 } = {}) {
       [0xfa, slot, layer + 1, 2, 0, 0, 0, 0, 0, 1, media & 0xff, media >> 8]);
   for (let l = 0; l < 3; l++) {
     for (let slot = 1; slot <= keys; slot++) seed(l, slot, 0xe9);
-    for (let i = 0; i < knobs * 3; i++)     seed(l, 16 + i, 0xea);
+    // Real encoder slots when the caller knows them; the generic run otherwise.
+    const ks = knobSlotList || Array.from({ length: knobs * 3 }, (_, i) => 16 + i);
+    for (const slot of ks) seed(l, slot, 0xea);
   }
 
   const emit = bytes => {
@@ -136,7 +156,8 @@ const navigator = { hid: { async requestDevice() { return [current]; }, addEvent
 const app = new Function(
   "document", "navigator", "window", "localStorage", "Option", "confirm", "alert", "Blob", "URL",
   script + "\nreturn { connect, writeAll, readAll, detect, bindingReports, preflight, " +
-           "alignKnobBase, slotName, knobBase, select, renderAll, renderLayoutPick, " +
+           "alignKnobBase, slotName, knobBase, knobSlotIn, knobAt, readCommand, " +
+           "select, renderAll, renderLayoutPick, " +
            "posOfSlot, disconnected, LAYOUTS, effDialect, " +
            "setForced: d => { forcedDialect = d; }, setLayout, " +
            "profile: () => profile, setProfile: p => { profile = p; }, " +
@@ -317,6 +338,61 @@ ok("a knob-3 write verifies clean", /Verified/.test(log3));
 ok("  with no false alarm",         !/Could not confirm/.test(log3));
 current = device;
 app.disconnected();
+
+console.log("\nfour-encoder pads are addressable (PR #1, issue: writing was refused)");
+// The SikaiCase 1189:8842 answers 0xFB with 12 keys and 4 encoders. A knob cap
+// of 3 rejected that answer and disabled writing while telling the user their
+// keypad had not identified itself. Verified on hardware by @geniosid.
+const dev4 = makeDevice({
+  keys: 12, knobs: 4,
+  // 0x10-0x18 for encoders 1-3, then 0x0D-0x0F for encoder 4.
+  knobSlotList: [0x10,0x11,0x12, 0x13,0x14,0x15, 0x16,0x17,0x18, 0x0D,0x0E,0x0F],
+});
+current = dev4;
+app.disconnected();
+await app.connect(false);
+eq("the 12-key, 4-encoder layout is adopted",
+   `${app.layoutOf().keys}/${app.layoutOf().knobs}`, "12/4");
+eq("writing is enabled", app.$("btnWrite").disabled, false);
+ok("and the device is not blamed", !/did not answer 0xFB/.test(logText()));
+
+console.log("\n  its fourth encoder sits below the keys, not above them");
+const lay4 = app.LAYOUTS.find(l => l.keys === 12 && l.knobs === 4);
+eq("encoder 1 ccw is 0x10", app.knobSlotIn(lay4, 0, 0), 0x10);
+eq("encoder 3 cw is 0x18",  app.knobSlotIn(lay4, 2, 2), 0x18);
+eq("encoder 4 ccw is 0x0D", app.knobSlotIn(lay4, 3, 0), 0x0D);
+eq("encoder 4 cw is 0x0F",  app.knobSlotIn(lay4, 3, 2), 0x0F);
+// The generic rule would have put encoder 4 at 0x19-0x1B, past the records.
+ok("which the generic rule would have got wrong",
+   app.knobSlotIn(null, 3, 0) !== app.knobSlotIn(lay4, 3, 0));
+const pos4 = app.posOfSlot(app.layoutOf());
+eq("and it is named, not printed as a bare slot",
+   app.slotName(0x0E, pos4), "knob 4 press");
+
+console.log("\n  and it is read with the command its firmware answers to");
+dev4.sent.length = 0;
+await app.readAll();
+const p4 = app.profile().layers[0].bindings;
+eq("all 24 records loaded", Object.keys(p4).length, 24);
+eq("  encoder 4 press came back", p4[0x0E]?.type, "media");
+// 15 keys + 3 knobs and 12 keys + 4 knobs are both 24 records; the firmware
+// counts keys + 3*knobs, and only the first form makes it reply.
+const readCmds = dev4.sent.filter(r => r.b[0] === 0xfa);
+ok("a read was issued", readCmds.length > 0);
+eq("addressed as 15 keys", readCmds[0].b[1], 0x0F);
+eq("  and 3 knobs",        readCmds[0].b[2], 0x03);
+current = device;
+app.disconnected();
+
+console.log("\nsingle-key pads have a layout to choose (issue #2)");
+// The reporter had a one-key pad, picked "0 keys, 1 knobs" as the nearest
+// thing, and their Ctrl+S landed on a knob slot and did nothing.
+app.renderLayoutPick();
+const opts = (app.$("layoutPick").children || []).map(o => o.value);
+ok("1 key, 0 knobs is offered", opts.includes("1/0"));
+app.setLayout(app.LAYOUTS.find(l => l.keys === 1 && l.knobs === 0));
+eq("its only key is slot 1", app.posOfSlot(app.layoutOf()).get(1), 1);
+app.setLayout(app.LAYOUTS.find(l => l.keys === 12 && l.knobs === 2));
 
 console.log("\nknob bindings follow the dialect's numbering");
 // Slot numbers are what gets persisted, and a knob's slot depends on the
