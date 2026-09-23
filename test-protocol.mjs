@@ -307,6 +307,26 @@ ed.layers[0].bindings[16] = raw;
 eq("untouched read-back is not a change", diffProfiles(dev, ed, findLayout(12, 2)).length, 0);
 
 
+console.log("\nthe Linux udev rule covers every model");
+{
+  // A model missing from the rule works on Windows and fails silently on
+  // Linux: Chrome cannot open a hidraw node it has no permission for, and the
+  // user sees a keypad that connects to nothing. 1189:8890 was missing, which
+  // is exactly how issue #3 was reported.
+  const { readFileSync } = await import("node:fs");
+  const rules = readFileSync(join(here, "linux/60-ch57x-keypad.rules"), "utf8");
+  const vendors  = /idVendor\}=="([^"]+)"/.exec(rules)[1].toLowerCase().split("|");
+  const products = /idProduct\}=="([^"]+)"/.exec(rules)[1].toLowerCase().split("|");
+  const hex4 = n => n.toString(16).padStart(4, "0");
+  for (const m of MODELS) {
+    eq(`  ${hex4(m.vid)}:${hex4(m.pid)} has udev coverage`,
+       vendors.includes(hex4(m.vid)) && products.includes(hex4(m.pid)), true);
+  }
+  // And the comment above the rule must list what the rule matches.
+  const listed = (/#   ([0-9a-f ]+)\n/.exec(rules) || [, ""])[1].trim().split(/\s+/);
+  eq("  the comment matches the rule", listed.join(" "), products.join(" "));
+}
+
 console.log("\nREADME stays in step with the code");
 {
   // The model table in the README is generated from LAYOUTS. If someone adds a

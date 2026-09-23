@@ -1,7 +1,11 @@
 # Mini keypads / macropads identifying as USB vendor 0x1189.
 # (Commonly called "CH57x" by convention; the actual MCU varies.)
-# Vendor 0x1189, product ids used across the family:
-#   8830 8831 8832 8833 8840 8842 8850
+# Product ids used across the family, under vendor 0x1189 and 0x514c:
+#   8830 8831 8832 8833 8840 8842 8850 8851 8890
+#
+# Keep this list in step with MODELS in index.html — a keypad missing here
+# works on Windows and silently fails on Linux, because Chrome cannot open a
+# hidraw node it has no permission for. A test in test-protocol.mjs enforces it.
 #
 # Grants the user of the active local seat read/write on the keypad's HID
 # nodes, so a configurator (ch57x-keyboard-tool, probe.py, or a WebHID page
@@ -10,4 +14,4 @@
 # MUST be numbered below 70. systemd's 70-uaccess.rules is what acts on the
 # uaccess tag; a rule that adds the tag later than that is silently ignored.
 KERNEL=="hidraw*", SUBSYSTEMS=="usb", ATTRS{idVendor}=="1189|514c", \
-  ATTRS{idProduct}=="8830|8831|8832|8833|8840|8842|8850|8851", TAG+="uaccess"
+  ATTRS{idProduct}=="8830|8831|8832|8833|8840|8842|8850|8851|8890", TAG+="uaccess"

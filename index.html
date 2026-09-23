@@ -1322,10 +1322,16 @@ function setStatus(text, cls) {
 async function connect(broad) {
   try {
     const list = await navigator.hid.requestDevice({
-      // A broad retry drops the vendor constraint entirely, so a pad shipping
-      // under some third vendor id can still be picked manually.
+      // The retry drops every constraint, not just the vendor id. Keeping
+      // usagePage 0xFF00 here made the escape hatch useless for the case that
+      // most needs it: a keypad whose configuration collection is not on the
+      // vendor page at all, or sits on a different interface, never appears in
+      // either list and is indistinguishable from dead hardware. An unrelated
+      // device picked by mistake is not dangerous — sendReport validates the
+      // report id and length against the descriptor and throws on a mismatch —
+      // and connect() warns when the vendor page is absent.
       filters: broad
-        ? [{ usagePage: 0xff00, usage: 0x01 }]
+        ? []
         : VENDOR_IDS.map(vendorId => ({ vendorId, usagePage: 0xff00, usage: 0x01 })),
     });
     if (!list.length) {
