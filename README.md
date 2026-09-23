@@ -52,12 +52,14 @@ with one to three knurled knobs along the top.
 | Windows | Device Manager → Properties → Details → Hardware Ids |
 
 Supported product ids: **`8830`, `8831`, `8832`, `8833`, `8840`, `8842`, `8850`,
-`8851`**, under vendor **`1189`** or **`514c`** — the same manufacturer ships under
-both.
+`8851`, `8890`**, under vendor **`1189`** or **`514c`** — the same manufacturer
+ships under both.
 
-If your pad has some other vendor id, press **Device not listed?** instead of
-**Connect keypad**. That drops the vendor filter and offers any device with the
-right HID interface, and the log prints the id so it can be added.
+If your pad is not offered, press **Device not listed?** instead of **Connect
+keypad**. That drops every filter and offers all HID devices, because a keypad
+whose configuration sits on an unexpected interface would otherwise never
+appear at all. Pick your keypad; the log prints its id and HID usage pages, so
+a report is enough to get it added.
 
 > **Not every model takes the same commands.** Three command formats exist and
 > the right one is chosen automatically from your keypad's USB id. You should

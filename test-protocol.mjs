@@ -325,6 +325,12 @@ console.log("\nthe Linux udev rule covers every model");
   // And the comment above the rule must list what the rule matches.
   const listed = (/#   ([0-9a-f ]+)\n/.exec(rules) || [, ""])[1].trim().split(/\s+/);
   eq("  the comment matches the rule", listed.join(" "), products.join(" "));
+  // As must the README, which is where a user actually looks to see whether
+  // their keypad is covered. It drifted once already.
+  const readme = readFileSync(join(here, "README.md"), "utf8");
+  const doc = /Supported product ids:([\s\S]*?), under vendor/.exec(readme)[1];
+  const documented = [...doc.matchAll(/`([0-9a-f]{4})`/g)].map(m => m[1]);
+  eq("  the README lists them too", documented.join(" "), products.join(" "));
 }
 
 console.log("\nREADME stays in step with the code");
