@@ -22,13 +22,14 @@ const core = js.slice(
 
 const mod = await import(
   "data:text/javascript;base64," +
-  Buffer.from(core + "\nexport {bindingReports, ledReports, keySlot, knobSlot, decodeRecord, touch, emptyReports, variantReport, DEVICE_VARIANTS, textToSteps, diffProfiles, blankProfile, LAYOUTS, findLayout, gridOrder, posOfSlot, DEFAULT_LAYOUT, VENDOR_IDS, MODELS, modelFor, IMPLEMENTED_DIALECT, ch3Reports, DIALECT_CAPS, displayGrid, knobOrder, ORIENTATIONS, MEDIA, ch2Reports, DIALECT_LABEL, dialectName, MODIFIER_NAMES, MODIFIERS, modName};\n").toString("base64")
+  Buffer.from(core + "\nexport {bindingReports, ledReports, keySlot, knobSlot, decodeRecord, touch, emptyReports, variantReport, DEVICE_VARIANTS, textToSteps, diffProfiles, blankProfile, LAYOUTS, findLayout, gridOrder, posOfSlot, DEFAULT_LAYOUT, VENDOR_IDS, MODELS, modelFor, IMPLEMENTED_DIALECT, ch3Reports, DIALECT_CAPS, displayGrid, knobOrder, ORIENTATIONS, MEDIA, ch2Reports, DIALECT_LABEL, dialectName, MODIFIER_NAMES, MODIFIERS, modName, reportBytes, configCollection, framingFor, frame, unframe, DEFAULT_FRAMING, REPORT_ID, REPORT_LEN};\n").toString("base64")
 );
 const { bindingReports, ledReports, keySlot, knobSlot, decodeRecord, touch,
         emptyReports, variantReport, DEVICE_VARIANTS, textToSteps, diffProfiles,
         blankProfile, LAYOUTS, findLayout, gridOrder, posOfSlot, DEFAULT_LAYOUT,
         VENDOR_IDS, MODELS, modelFor, IMPLEMENTED_DIALECT, ch3Reports,
-        DIALECT_CAPS, displayGrid, knobOrder, ORIENTATIONS, MEDIA, ch2Reports, DIALECT_LABEL, dialectName, MODIFIER_NAMES, MODIFIERS, modName } = mod;
+        DIALECT_CAPS, displayGrid, knobOrder, ORIENTATIONS, MEDIA, ch2Reports, DIALECT_LABEL, dialectName, MODIFIER_NAMES, MODIFIERS, modName,
+        reportBytes, configCollection, framingFor, frame, unframe, DEFAULT_FRAMING, REPORT_ID, REPORT_LEN } = mod;
 
 let pass = 0, fail = 0;
 const hx = a => Array.from(a, b => b.toString(16).padStart(2, "0")).join(" ");
@@ -306,6 +307,64 @@ dev.layers[0].bindings[16] = raw;
 ed.layers[0].bindings[16] = raw;
 eq("untouched read-back is not a change", diffProfiles(dev, ed, findLayout(12, 2)).length, 0);
 
+
+console.log("\nreport framing comes from the descriptor");
+{
+  // Chrome refuses a write before it reaches the device when framing and
+  // descriptor disagree, and says only "Failed to write the report." —
+  // for every command format alike. Issue #3 (1189:8890) was that.
+  const bytes = n => [{ reportSize: 8, reportCount: n }];
+  const dev = (outs, feats) => ({ collections: [{ usagePage: 0xff00,
+    outputReports: outs, featureReports: feats || [] }] });
+
+  eq("64 one-byte fields are 64 bytes", reportBytes({ items: bytes(64) }), 64);
+  eq("  bits round up to whole bytes",
+     reportBytes({ items: [{ reportSize: 1, reportCount: 3 }] }), 1);
+
+  // The guarantee that matters most: verified hardware is untouched.
+  eq("no descriptor detail keeps the verified framing", framingFor({ collections: [{ usagePage: 0xff00 }] }), DEFAULT_FRAMING);
+  eq("  as does no device at all",                     framingFor(null), DEFAULT_FRAMING);
+  eq("output report 3 at 64 bytes is the verified framing",
+     framingFor(dev([{ reportId: 3, items: bytes(64) }])), DEFAULT_FRAMING);
+  const r = new Uint8Array(64); r.set([0xfe, 0x01, 0x01, 0x01]);
+  const same = frame(r, DEFAULT_FRAMING);
+  eq("  and frames byte for byte as before", same.id === 3 && same.data.every((b, i) => b === r[i]), true);
+
+  // No report ids: 0x03 has to travel as data, as a raw endpoint write sends it.
+  const bare = framingFor(dev([{ reportId: 0, items: bytes(64) }]));
+  eq("no report ids -> sent as id 0", bare.id, 0);
+  const fb = frame(r, bare);
+  eq("  with 0x03 as the first data byte", fb.data[0], 0x03);
+  eq("  then the message itself",         fb.data[1], 0xfe);
+  eq("  still 64 bytes",                   fb.data.length, 64);
+
+  // A shorter output report: trailing padding may go, content may not.
+  const short = framingFor(dev([{ reportId: 3, items: bytes(32) }]));
+  eq("a 32-byte output report is honoured", short.len, 32);
+  eq("  and a short message is cut to fit", frame(r, short).data.length, 32);
+  const full = new Uint8Array(64); full[40] = 0x07;
+  let threw = null; try { frame(full, short); } catch (e) { threw = e.message; }
+  eq("  but real content past the end is an error, never silently dropped",
+     /does not fit/.test(threw || ""), true);
+
+  // Things that cannot work get named rather than guessed at.
+  eq("feature reports only is diagnosed",
+     framingFor(dev([], [{ reportId: 3, items: bytes(64) }])).why, "declares only feature reports");
+  eq("  and flagged",   framingFor(dev([], [{ reportId: 3, items: bytes(64) }])).none, true);
+  const other = framingFor(dev([{ reportId: 5, items: bytes(64) }]));
+  eq("a different report id is not guessed at", other.id, REPORT_ID);
+  eq("  but it is reported", other.other.join(), "5");
+
+  // Replies from a device without report ids carry the 0x03 back as data.
+  const reply = Uint8Array.of(0x03, 0xfb, 12, 2);
+  eq("an echoed 0x03 is stripped from a bare reply", unframe(0, reply, bare)[0], 0xfb);
+  eq("  but not when the device does not echo it",
+     unframe(0, Uint8Array.of(0xfb, 12, 2), bare)[1], 12);
+  eq("  and never on verified framing", unframe(3, Uint8Array.of(0xfb, 12, 2), DEFAULT_FRAMING)[0], 0xfb);
+
+  eq("the vendor collection wins over a keyboard one",
+     configCollection({ collections: [{ usagePage: 0x01 }, { usagePage: 0xff00 }] }).usagePage, 0xff00);
+}
 
 console.log("\nthe Linux udev rule covers every model");
 {

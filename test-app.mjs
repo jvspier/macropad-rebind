@@ -98,9 +98,21 @@ const windowStub = { addEventListener() {} };
    Records are stored keyed by (layer, slot). The write message and the read
    reply share one layout — only byte 0 differs, 0xFE vs 0xFA — so replaying a
    stored write means swapping that byte and nothing else. */
-function makeDevice({ keys = 12, knobs = 2, pid = 0x8842, knobSlotList = null } = {}) {
+function makeDevice({ keys = 12, knobs = 2, pid = 0x8842, knobSlotList = null,
+                      descriptor = null } = {}) {
   const listeners = [];
   const sent = [];
+  // `descriptor` ({ inputReports, outputReports, featureReports }) makes this
+  // mock refuse writes the way Chrome does before they reach a device: no
+  // output reports at all, a report longer than declared, or a report id
+  // whose presence disagrees with the descriptor. Without a descriptor it
+  // behaves as before, like a platform that reports no detail.
+  const bytesOf = r => Math.ceil((r.items || [])
+    .reduce((n, i) => n + i.reportSize * i.reportCount, 0) / 8);
+  const declared = descriptor ? [...(descriptor.inputReports || []),
+    ...(descriptor.outputReports || []), ...(descriptor.featureReports || [])] : [];
+  const hasIds = declared.some(r => r.reportId);
+  const bare = !!descriptor && !hasIds;     // no report ids: 0x03 travels as data
   const config = new Map();          // "layer:slot" -> 64 bytes, read-reply form
   const key = (layer, slot) => `${layer}:${slot}`;
 
@@ -117,21 +129,31 @@ function makeDevice({ keys = 12, knobs = 2, pid = 0x8842, knobSlotList = null } 
   }
 
   const emit = bytes => {
-    const data = new DataView(new Uint8Array(
-      bytes.concat(Array(64 - bytes.length).fill(0))).buffer);
-    for (const cb of listeners) cb({ reportId: 3, data });
+    const buf = new Uint8Array(64);
+    buf.set((bare ? [0x03, ...bytes] : bytes).slice(0, 64));
+    const data = new DataView(buf.buffer);
+    for (const cb of listeners) cb({ reportId: bare ? 0 : 3, data });
   };
   return {
     vendorId: 0x1189, productId: pid, productName: "USB Composite Device",
-    opened: false, collections: [{ usagePage: 0xff00 }],
+    opened: false, collections: [{ usagePage: 0xff00, ...(descriptor || {}) }],
+    refused: 0,
     sent,
     deaf: false,          // when true, accept writes and store nothing
     config,
     async open() { this.opened = true; },
     addEventListener(_ev, cb) { listeners.push(cb); },
     async sendReport(id, data) {
-      const b = Array.from(data);
-      sent.push({ id, b });
+      if (descriptor) {
+        const max = Math.max(0, ...(descriptor.outputReports || []).map(bytesOf));
+        if (!max || data.length > max || hasIds !== (id !== 0)) {
+          this.refused++;
+          throw new Error("Failed to write the report.");
+        }
+      }
+      const raw = Array.from(data);
+      const b = bare && raw[0] === 0x03 ? raw.slice(1) : raw;
+      sent.push({ id, b, raw });
       if (b[0] === 0xfb) { emit([0xfb, keys, knobs]); return; }
       if (b[0] === 0xfe && !this.deaf) {
         // b[1] slot, b[2] layer (1-based). Store it as the read reply.
@@ -393,6 +415,59 @@ ok("1 key, 0 knobs is offered", opts.includes("1/0"));
 app.setLayout(app.LAYOUTS.find(l => l.keys === 1 && l.knobs === 0));
 eq("its only key is slot 1", app.posOfSlot(app.layoutOf()).get(1), 1);
 app.setLayout(app.LAYOUTS.find(l => l.keys === 12 && l.knobs === 2));
+
+console.log("\nreport framing follows the descriptor (issue #3)");
+// A 1189:8890 refused all three command formats in under a second with
+// "Failed to write the report." — not one byte left the browser, because
+// every device got report id 3 at 64 bytes whatever its descriptor said.
+const out64 = n => ({ reportId: n, items: [{ reportSize: 8, reportCount: 64 }] });
+
+// First, the guarantee: the verified descriptor gets exactly what it got before.
+const devV = makeDevice({ descriptor: { inputReports: [out64(3)], outputReports: [out64(3)] } });
+current = devV; app.disconnected(); await app.connect(false);
+await app.readAll();
+eq("verified descriptor: nothing refused", devV.refused, 0);
+ok("  every report still id 3 at 64 bytes",
+   devV.sent.length > 0 && devV.sent.every(r => r.id === 3 && r.raw.length === 64));
+ok("  and no framing change is announced", !/Framing adjusted/.test(logText()));
+
+// A keypad with no report ids. Chrome refuses id 3 outright.
+const devB = makeDevice({ descriptor: { inputReports: [out64(0)], outputReports: [out64(0)] } });
+current = devB; app.disconnected();
+const beforeB = logText().length;
+await app.connect(false);
+const logB = logText().slice(beforeB);
+ok("no report ids: the adjustment is announced", /Framing adjusted.*no report ids/.test(logB));
+ok("  and the descriptor is shown", /Reports: in 0 \(64 bytes\), out 0 \(64 bytes\)/.test(logB));
+eq("  identify got through and the layout was read",
+   `${app.layoutOf().keys}/${app.layoutOf().knobs}`, "12/2");
+eq("  so writing is enabled", app.$("btnWrite").disabled, false);
+await app.readAll();
+eq("  a full read comes back", Object.keys(app.profile().layers[0].bindings).length, 18);
+app.profile().layers[0].bindings[1] = { type: "key", steps: [{ mods: 0x01, code: 0x06 }], delay: 0 };
+const beforeW = logText().length;
+await app.writeAll();
+const logW = logText().slice(beforeW);
+eq("  the browser refused nothing", devB.refused, 0);
+ok("  and the write verified", /Verified/.test(logW));
+ok("  every report sent as id 0 with 0x03 leading",
+   devB.sent.every(r => r.id === 0 && r.raw[0] === 0x03));
+
+// A keypad declaring only feature reports cannot be written with output
+// reports at all. Say so on connect, and name the refusal when it happens.
+const devF = makeDevice({ descriptor: { inputReports: [out64(3)], outputReports: [],
+                                        featureReports: [out64(3)] } });
+current = devF; app.disconnected();
+const beforeF = logText().length;
+await app.connect(false);
+ok("feature-only: diagnosed on connect", /declares only feature reports/.test(logText().slice(beforeF)));
+app.setLayout(app.LAYOUTS.find(l => l.keys === 12 && l.knobs === 2));
+app.profile().layers[0].bindings[1] = { type: "media", media: 0xe9 };
+const beforeF2 = logText().length;
+await app.readAll();
+ok("  and a refused write names what was sent and where to look",
+   /Sent 0x[0-9a-f]{2} as report id 3, 64 bytes.*chrome:\/\/device-log/.test(logText().slice(beforeF2)));
+current = device; app.disconnected();
 
 console.log("\nknob bindings follow the dialect's numbering");
 // Slot numbers are what gets persisted, and a knob's slot depends on the

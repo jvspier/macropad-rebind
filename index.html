@@ -965,6 +965,87 @@ function msg(bytes) {
   return out;
 }
 
+/* ------------------------------------------------------------------
+   Report framing.
+
+   Every model this tool was built against takes output report id 3 at
+   64 bytes. Not every model does, and Chrome refuses a write *before it
+   reaches the device* when the framing disagrees with the device's HID
+   descriptor: a report longer than the declared output report, a report
+   id sent to a device that declares none (or the reverse), or any output
+   report at all to a device that declares only feature reports. All of
+   those surface as the same bare "Failed to write the report." — for
+   every command format alike, because the payload never gets a look in.
+   Issue #3 was exactly that: a 1189:8890 refusing all three formats in
+   under a second, without one byte leaving the browser.
+
+   WebHID exposes the parsed descriptor, so the framing is read from it.
+   A device declaring output report 3 at 64 bytes — every verified unit —
+   gets byte-for-byte what it always got, and so does one whose platform
+   reports no descriptor detail at all.
+   ------------------------------------------------------------------ */
+const reportBytes = r => Math.ceil((r?.items || [])
+  .reduce((n, it) => n + (it.reportSize || 0) * (it.reportCount || 0), 0) / 8);
+
+/** The collection that carries configuration: the vendor page, else the first. */
+const configCollection = dev =>
+  (dev?.collections || []).find(c => c.usagePage === 0xff00) || dev?.collections?.[0] || null;
+
+const DEFAULT_FRAMING = { id: REPORT_ID, len: REPORT_LEN, prefix: null,
+                          why: "the framing verified on real hardware" };
+
+/** How writes must be framed for this device, from its descriptor. */
+function framingFor(dev) {
+  const col  = configCollection(dev);
+  const outs = col?.outputReports;
+  // No descriptor detail: keep what is verified rather than guess.
+  if (!Array.isArray(outs)) return DEFAULT_FRAMING;
+  if (!outs.length) {
+    const feats = col.featureReports || [];
+    return { ...DEFAULT_FRAMING, none: true,
+             why: feats.length ? "declares only feature reports" : "declares no output reports" };
+  }
+  const three = outs.find(r => r.reportId === REPORT_ID);
+  if (three) {
+    const len = reportBytes(three) || REPORT_LEN;
+    return len === REPORT_LEN ? DEFAULT_FRAMING
+      : { id: REPORT_ID, len, prefix: null, why: `output report ${REPORT_ID} is ${len} bytes` };
+  }
+  const bare = outs.find(r => !r.reportId);
+  if (bare) {
+    // No report ids at all. The protocol's leading 0x03 then travels as the
+    // first data byte — which is what a tool writing straight to the USB
+    // endpoint sends — rather than as an id the device never declared.
+    return { id: 0, len: reportBytes(bare) || REPORT_LEN, prefix: REPORT_ID,
+             why: "declares no report ids, so 0x03 is sent as the first data byte" };
+  }
+  // Only other ids. Choosing one would be a guess about which carries
+  // configuration; keep the default and let the log say why it fails.
+  return { ...DEFAULT_FRAMING, other: outs.map(r => r.reportId),
+           why: `declares output report id ${outs.map(r => r.reportId).join(", ")}, not ${REPORT_ID}` };
+}
+
+/** Apply a framing to one message. Throws rather than cut real content. */
+function frame(report, f) {
+  const body = f.prefix != null ? Uint8Array.of(f.prefix, ...report) : report;
+  if (body.length > f.len && body.subarray(f.len).some(b => b !== 0))
+    throw new Error(`message does not fit this keypad's ${f.len}-byte report`);
+  const data = new Uint8Array(f.len);
+  data.set(body.subarray(0, f.len));
+  return { id: f.id, data };
+}
+
+/** The reverse of frame(): the message inside an incoming report. On a
+    device with no report ids the leading 0x03 arrives as data, just as it
+    was sent. Stripped only when it is actually there — replies begin with
+    the command they answer (0xFB, 0xFA), never 0x03 — so a device that
+    does not echo it is read correctly either way. */
+function unframe(reportId, bytes, f) {
+  return f.prefix != null && !reportId && bytes[0] === f.prefix ? bytes.subarray(1) : bytes;
+}
+
+let framing = DEFAULT_FRAMING;       // replaced from the descriptor on connect
+
 /** All reports needed to program one slot. */
 function bindingReports(slot, b) {
   const d = effDialect();
@@ -1344,11 +1425,15 @@ async function connect(broad) {
     }
     device = list[0];
     if (!device.opened) await device.open();
+    // Framing first: everything sent from here on, the wake-up included, has
+    // to match what this device's descriptor declares.
+    framing = framingFor(device);
     device.addEventListener("inputreport", onInput);
     // ch57x-keyboard-tool sends an all-zero report right after claiming the
     // interface, before anything else. Harmless (0x00 is not a command) and
     // apparently needed by some units, so do the same.
-    try { await device.sendReport(REPORT_ID, new Uint8Array(REPORT_LEN)); } catch { /* not fatal */ }
+    try { const w = frame(new Uint8Array(REPORT_LEN), framing);
+          await device.sendReport(w.id, w.data); } catch { /* not fatal */ }
     setStatus("connected", "on");
     log(`Opened ${device.productName || "keypad"} — ` +
         `${(device.vendorId || 0).toString(16).padStart(4,"0")}:` +
@@ -1360,6 +1445,23 @@ async function connect(broad) {
     const pages = (device.collections || [])
       .map(c => "0x" + (c.usagePage || 0).toString(16).padStart(4, "0").toUpperCase());
     log(`HID usage page(s): ${pages.join(", ") || "none reported"}.`);
+
+    // What the configuration interface actually declares — the one piece of
+    // information that settles a "Failed to write the report" on sight.
+    const cc = configCollection(device);
+    const reps = (list, kind) => (list || []).map(r => `${kind} ${r.reportId} (${reportBytes(r)} bytes)`);
+    const summary = [...reps(cc?.inputReports, "in"), ...reps(cc?.outputReports, "out"),
+                     ...reps(cc?.featureReports, "feature")];
+    if (summary.length) log(`Reports: ${summary.join(", ")}.`);
+    if (framing.none)
+      log(`This keypad ${framing.why} on its configuration interface. This tool ` +
+          `sends output reports, so the browser will refuse every write. Please open ` +
+          `an issue with this log — it is exactly what is needed to add support.`, "e");
+    else if (framing.other)
+      log(`This keypad ${framing.why}, so writes will probably be refused. Please ` +
+          `open an issue with this log.`, "w");
+    else if (framing !== DEFAULT_FRAMING)
+      log(`Framing adjusted to fit this keypad: ${framing.why}.`, "w");
     if (pages.length && !pages.includes("0xFF00"))
       log(`None of these is the vendor page 0xFF00 that carries the configuration. ` +
           `Writes will probably be accepted and ignored. If you reached this through ` +
@@ -1452,6 +1554,7 @@ async function connect(broad) {
 
 function disconnected() {
   device = null;
+  framing = DEFAULT_FRAMING;
   dialect = IMPLEMENTED_DIALECT;
   // The override belongs to the keypad it was chosen for. The selector hides
   // itself when nothing is connected, so a leftover override would be applied
@@ -1471,7 +1574,8 @@ function disconnected() {
 
 let collector = null;
 function onInput(e) {
-  const bytes = new Uint8Array(e.data.buffer, e.data.byteOffset, e.data.byteLength);
+  const bytes = unframe(e.reportId,
+    new Uint8Array(e.data.buffer, e.data.byteOffset, e.data.byteLength), framing);
   if (collector) collector.push(bytes);
   log(`in  ${hex(bytes.subarray(0, 16))}`);
 }
@@ -1491,7 +1595,15 @@ async function collect(want, ms) {
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 async function send(report, label) {
-  await device.sendReport(REPORT_ID, report);
+  const { id, data } = frame(report, framing);
+  try {
+    await device.sendReport(id, data);
+  } catch (e) {
+    // Chrome gives no reason. Say what was refused, so a report can.
+    throw new Error(`${e.message} Sent 0x${hex(report.subarray(0, 1))} as report ` +
+                    `id ${id}, ${data.length} bytes (${framing.why}). The exact reason is ` +
+                    `in chrome://device-log.`);
+  }
   log(`out ${hex(report.subarray(0, 16))}${label ? "   " + label : ""}`);
   await sleep(6);
 }
@@ -1590,7 +1702,6 @@ async function writeAll() {
       log(`Shorten them, or check the command format is right for your keypad.`, "w");
       return;
     }
-    log("Reading current config so the changes can be shown first.", "w");
     if (!effCaps().read) {
       const n = profile.layers.reduce((a, l) => a + Object.values(l.bindings).filter(Boolean).length, 0);
       if (!n) { log("Nothing in the editor to write.", "w"); return; }
@@ -1598,6 +1709,7 @@ async function writeAll() {
                    `there is no diff to show you and no way to verify afterwards. ` +
                    `Support for it is untested.`)) { log("Write cancelled.", "w"); return; }
     } else {
+    log("Reading current config so the changes can be shown first.", "w");
     const onDevice = await readDeviceProfile(layout.keys, layout.knobs, false);
     // Write only sends what the editor holds; it never clears a slot the editor
     // has no binding for. So a "del" row is not a pending change — it is a slot
