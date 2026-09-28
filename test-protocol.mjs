@@ -22,14 +22,14 @@ const core = js.slice(
 
 const mod = await import(
   "data:text/javascript;base64," +
-  Buffer.from(core + "\nexport {bindingReports, ledReports, keySlot, knobSlot, decodeRecord, touch, emptyReports, variantReport, DEVICE_VARIANTS, textToSteps, diffProfiles, blankProfile, LAYOUTS, findLayout, gridOrder, posOfSlot, DEFAULT_LAYOUT, VENDOR_IDS, MODELS, modelFor, IMPLEMENTED_DIALECT, ch3Reports, DIALECT_CAPS, displayGrid, knobOrder, ORIENTATIONS, MEDIA, ch2Reports, DIALECT_LABEL, dialectName, MODIFIER_NAMES, MODIFIERS, modName, reportBytes, configCollection, framingFor, frame, unframe, DEFAULT_FRAMING, REPORT_ID, REPORT_LEN};\n").toString("base64")
+  Buffer.from(core + "\nexport {bindingReports, ledReports, keySlot, knobSlot, decodeRecord, touch, emptyReports, variantReport, DEVICE_VARIANTS, textToSteps, diffProfiles, blankProfile, LAYOUTS, findLayout, gridOrder, posOfSlot, DEFAULT_LAYOUT, VENDOR_IDS, MODELS, modelFor, IMPLEMENTED_DIALECT, ch3Reports, DIALECT_CAPS, displayGrid, knobOrder, ORIENTATIONS, MEDIA, ch2Reports, DIALECT_LABEL, dialectName, MODIFIER_NAMES, MODIFIERS, modName, reportBytes, configCollection, framingFor, frame, unframe, pickInterface, DEFAULT_FRAMING, REPORT_ID, REPORT_LEN};\n").toString("base64")
 );
 const { bindingReports, ledReports, keySlot, knobSlot, decodeRecord, touch,
         emptyReports, variantReport, DEVICE_VARIANTS, textToSteps, diffProfiles,
         blankProfile, LAYOUTS, findLayout, gridOrder, posOfSlot, DEFAULT_LAYOUT,
         VENDOR_IDS, MODELS, modelFor, IMPLEMENTED_DIALECT, ch3Reports,
         DIALECT_CAPS, displayGrid, knobOrder, ORIENTATIONS, MEDIA, ch2Reports, DIALECT_LABEL, dialectName, MODIFIER_NAMES, MODIFIERS, modName,
-        reportBytes, configCollection, framingFor, frame, unframe, DEFAULT_FRAMING, REPORT_ID, REPORT_LEN } = mod;
+        reportBytes, configCollection, framingFor, frame, unframe, pickInterface, DEFAULT_FRAMING, REPORT_ID, REPORT_LEN } = mod;
 
 let pass = 0, fail = 0;
 const hx = a => Array.from(a, b => b.toString(16).padStart(2, "0")).join(" ");
@@ -364,6 +364,21 @@ console.log("\nreport framing comes from the descriptor");
 
   eq("the vendor collection wins over a keyboard one",
      configCollection({ collections: [{ usagePage: 0x01 }, { usagePage: 0xff00 }] }).usagePage, 0xff00);
+}
+
+console.log("\nthe configuration interface is chosen, not the first one");
+{
+  const iface = (...pages) => ({ collections: pages.map(([usagePage, usage]) => ({ usagePage, usage })) });
+  const media = iface([0x0c, 0x01]), kbd = iface([0x01, 0x06]);
+  const vendor1 = iface([0xff00, 0x01]), vendor2 = iface([0xff00, 0x02]);
+  eq("media interface listed first: the vendor one is still chosen",
+     pickInterface([media, vendor1]), vendor1);
+  eq("  usage 1 is preferred among vendor collections",
+     pickInterface([vendor2, vendor1]), vendor1);
+  eq("  any vendor collection beats none", pickInterface([media, kbd, vendor2]), vendor2);
+  eq("  with no vendor collection, the first is used (and connect warns)",
+     pickInterface([media, kbd]), media);
+  eq("  a single interface is simply that one", pickInterface([vendor1]), vendor1);
 }
 
 console.log("\nthe Linux udev rule covers every model");

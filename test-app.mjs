@@ -99,7 +99,7 @@ const windowStub = { addEventListener() {} };
    reply share one layout — only byte 0 differs, 0xFE vs 0xFA — so replaying a
    stored write means swapping that byte and nothing else. */
 function makeDevice({ keys = 12, knobs = 2, pid = 0x8842, knobSlotList = null,
-                      descriptor = null } = {}) {
+                      descriptor = null, usagePage = 0xff00 } = {}) {
   const listeners = [];
   const sent = [];
   // `descriptor` ({ inputReports, outputReports, featureReports }) makes this
@@ -136,7 +136,7 @@ function makeDevice({ keys = 12, knobs = 2, pid = 0x8842, knobSlotList = null,
   };
   return {
     vendorId: 0x1189, productId: pid, productName: "USB Composite Device",
-    opened: false, collections: [{ usagePage: 0xff00, ...(descriptor || {}) }],
+    opened: false, collections: [{ usagePage, usage: 1, ...(descriptor || {}) }],
     refused: 0,
     sent,
     deaf: false,          // when true, accept writes and store nothing
@@ -172,7 +172,12 @@ function makeDevice({ keys = 12, knobs = 2, pid = 0x8842, knobSlotList = null,
 const device = makeDevice();
 // Swappable so a second, differently shaped keypad can be plugged in mid-test.
 let current = device;
-const navigator = { hid: { async requestDevice() { return [current]; }, addEventListener() {} } };
+// A physical keypad can hand back several interfaces from one pick, so
+// `current` may be an array. The filters asked for are kept for inspection.
+let lastFilters = null;
+const navigator = { hid: {
+  async requestDevice(opts) { lastFilters = opts.filters; return [].concat(current); },
+  addEventListener() {} } };
 
 /* ---- load the real script ---- */
 const app = new Function(
@@ -421,6 +426,7 @@ console.log("\nreport framing follows the descriptor (issue #3)");
 // "Failed to write the report." — not one byte left the browser, because
 // every device got report id 3 at 64 bytes whatever its descriptor said.
 const out64 = n => ({ reportId: n, items: [{ reportSize: 8, reportCount: 64 }] });
+const VENDOR_IDS_FOR_TEST = [0x1189, 0x514c];
 
 // First, the guarantee: the verified descriptor gets exactly what it got before.
 const devV = makeDevice({ descriptor: { inputReports: [out64(3)], outputReports: [out64(3)] } });
@@ -468,6 +474,28 @@ await app.readAll();
 ok("  and a refused write names what was sent and where to look",
    /Sent 0x[0-9a-f]{2} as report id 3, 64 bytes.*chrome:\/\/device-log/.test(logText().slice(beforeF2)));
 current = device; app.disconnected();
+
+console.log("\none pick, several interfaces: the configuration one is opened (issue #3)");
+// Atom-66's 1189:8890 came back through "Device not listed?" as its
+// media-key interface — Consumer page, one 2-byte input report — because the
+// app opened whichever interface the picker listed first.
+const mediaIface  = makeDevice({ pid: 0x8890, usagePage: 0x0c });
+const configIface = makeDevice({ pid: 0x8842 });
+current = [mediaIface, configIface];
+app.disconnected();
+const beforeI = logText().length;
+await app.connect(true);                    // the "Device not listed?" path
+const logI = logText().slice(beforeI);
+eq("the unfiltered search really is unfiltered", JSON.stringify(lastFilters), "[]");
+eq("the media interface was left alone",  mediaIface.opened, false);
+eq("the configuration interface was opened", configIface.opened, true);
+ok("  and the log lists both and says which", /2 HID interfaces: 1\) 0x000C, 2\) 0xFF00\. Using 2/.test(logI));
+ok("  so the device was not written off", !/declares no output reports/.test(logI));
+current = device; app.disconnected();
+await app.connect(false);
+ok("the normal search still asks for the vendor page only",
+   lastFilters.every(f => f.usagePage === 0xff00 && VENDOR_IDS_FOR_TEST.includes(f.vendorId)));
+app.disconnected();
 
 console.log("\nknob bindings follow the dialect's numbering");
 // Slot numbers are what gets persisted, and a knob's slot depends on the
