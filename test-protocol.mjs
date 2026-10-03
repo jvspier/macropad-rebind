@@ -22,13 +22,13 @@ const core = js.slice(
 
 const mod = await import(
   "data:text/javascript;base64," +
-  Buffer.from(core + "\nexport {bindingReports, ledReports, keySlot, knobSlot, decodeRecord, touch, emptyReports, variantReport, DEVICE_VARIANTS, textToSteps, diffProfiles, blankProfile, LAYOUTS, findLayout, gridOrder, posOfSlot, DEFAULT_LAYOUT, VENDOR_IDS, MODELS, modelFor, IMPLEMENTED_DIALECT, ch3Reports, DIALECT_CAPS, displayGrid, knobOrder, ORIENTATIONS, MEDIA, ch2Reports, DIALECT_LABEL, dialectName, MODIFIER_NAMES, MODIFIERS, modName, reportBytes, configCollection, framingFor, frame, unframe, pickInterface, DEFAULT_FRAMING, REPORT_ID, REPORT_LEN};\n").toString("base64")
+  Buffer.from(core + "\nexport {bindingReports, ledReports, keySlot, knobSlot, decodeRecord, touch, emptyReports, variantReport, DEVICE_VARIANTS, textToSteps, diffProfiles, blankProfile, LAYOUTS, findLayout, gridOrder, posOfSlot, DEFAULT_LAYOUT, VENDOR_IDS, MODELS, modelFor, IMPLEMENTED_DIALECT, ch3Reports, DIALECT_CAPS, displayGrid, knobOrder, ORIENTATIONS, MEDIA, ch2Reports, DIALECT_LABEL, dialectName, MODIFIER_NAMES, MODIFIERS, modName, lcReports, reportBytes, configCollection, framingFor, frame, unframe, pickInterface, DEFAULT_FRAMING, REPORT_ID, REPORT_LEN};\n").toString("base64")
 );
 const { bindingReports, ledReports, keySlot, knobSlot, decodeRecord, touch,
         emptyReports, variantReport, DEVICE_VARIANTS, textToSteps, diffProfiles,
         blankProfile, LAYOUTS, findLayout, gridOrder, posOfSlot, DEFAULT_LAYOUT,
         VENDOR_IDS, MODELS, modelFor, IMPLEMENTED_DIALECT, ch3Reports,
-        DIALECT_CAPS, displayGrid, knobOrder, ORIENTATIONS, MEDIA, ch2Reports, DIALECT_LABEL, dialectName, MODIFIER_NAMES, MODIFIERS, modName,
+        DIALECT_CAPS, displayGrid, knobOrder, ORIENTATIONS, MEDIA, ch2Reports, DIALECT_LABEL, dialectName, MODIFIER_NAMES, MODIFIERS, modName, lcReports,
         reportBytes, configCollection, framingFor, frame, unframe, pickInterface, DEFAULT_FRAMING, REPORT_ID, REPORT_LEN } = mod;
 
 let pass = 0, fail = 0;
@@ -308,6 +308,61 @@ ed.layers[0].bindings[16] = raw;
 eq("untouched read-back is not a change", diffProfiles(dev, ed, findLayout(12, 2)).length, 0);
 
 
+console.log("\nLCTECH format (Alternative C), from the vendor's configurator");
+{
+  // Byte layouts read out of LCSKB 1.23.12.13. One report per binding:
+  // [type, layer, slot, 0, payload x8], no commit, no separators.
+  const one = (b, slot = 1, l = 0) => {
+    const r = lcReports(slot, b, l);
+    eq(`  ${JSON.stringify(b).slice(0, 40)}… is one report`, r.length, 1);
+    return Array.from(r[0].subarray(0, 12));
+  };
+  eq("Ctrl+C on key 1, layer 1", one({ type: "key", steps: [{ mods: 0x01, code: 0x06 }], delay: 0 }).join(),
+     [1, 1, 1, 0, 0x01, 0, 0x06, 0, 0, 0, 0, 0].join());
+  eq("Win+Shift+S on key 3, layer 2",
+     one({ type: "key", steps: [{ mods: 0x0a, code: 0x16 }], delay: 0 }, 3, 1).join(),
+     [1, 2, 3, 0, 0x0a, 0, 0x16, 0, 0, 0, 0, 0].join());
+  eq("knob 1 cw is slot 103", knobSlot(0, 2, "lctech"), 103);
+  eq("knob 3 ccw is slot 107", knobSlot(2, 0, "lctech"), 107);
+  eq("volume up is bit 7",  one({ type: "media", media: 0xe9 }).slice(4, 8).join(), [0x80, 0, 0, 0].join());
+  eq("volume down is bit 8", one({ type: "media", media: 0xea }).slice(4, 8).join(), [0, 1, 0, 0].join());
+  eq("browser is bit 18",   one({ type: "media", media: 0x223 }).slice(4, 8).join(), [0, 0, 4, 0].join());
+  eq("  and media is type 2", one({ type: "media", media: 0xe2 })[0], 2);
+  eq("middle click", one({ type: "mouse", action: "click", buttons: 4 }).slice(0, 8).join(), [3, 1, 1, 0, 4, 0, 0, 0].join());
+  eq("wheel down is -1 in the wheel byte", one({ type: "mouse", action: "wheel", wheel: -1 })[7], 0xff);
+  const refuse = b => { try { lcReports(1, b, 0); return null; } catch (e) { return e.message; } };
+  eq("a sequence is refused, not truncated",
+     /one key combination/.test(refuse({ type: "key", steps: [{ mods: 0, code: 4 }, { mods: 0, code: 5 }], delay: 0 })), true);
+  eq("a media key it does not offer is refused", /not one this keypad offers/.test(refuse({ type: "media", media: 0xb7 })), true);
+  eq("mouse movement is refused", /not supported/.test(refuse({ type: "mouse", action: "move", dx: 1, dy: 0 })), true);
+  eq("the format allows one step",  DIALECT_CAPS.lctech.maxSteps, 1);
+  eq("  and never sends the factory reset (type 6)",
+     [{ type: "key", steps: [{ mods: 0, code: 4 }], delay: 0 }, { type: "media", media: 0xe9 },
+      { type: "mouse", action: "click", buttons: 1 }].every(b => lcReports(1, b, 0)[0][0] !== 6), true);
+}
+
+console.log("\nthe 6-key, 1-knob layout matches what was observed (issue #4)");
+{
+  // @wtown42's three runs, recorded on the old 3x2 layout: they bound the
+  // on-screen keys K1..K6 to type 1..6 and reported what each physical key
+  // typed. Each run says which slot sits at each physical position.
+  const old = { keys: 6, knobs: 1, cols: 3, rows: 2 };
+  const slotsAt = (o, typed) => typed.map(d => gridOrder({ ...old, orientation: o })[d - 1]);
+  const six = LAYOUTS.find(l => l.keys === 6 && l.knobs === 1);
+  const shown = o => gridOrder({ ...six, orientation: o });
+  eq("held with the knob on the right (their Normal run)",
+     shown("clockwise").join(), slotsAt("normal", [4, 1, 5, 2, 6, 3]).join());
+  eq("held with the knob on top (their Clockwise run)",
+     shown("normal").join(), slotsAt("clockwise", [3, 6, 2, 5, 1, 4]).join());
+  eq("held with the knob on top (their Anticlockwise run)",
+     shown("normal").join(), slotsAt("counter-clockwise", [4, 1, 5, 2, 6, 3]).join());
+  eq("it opens the way it is meant to be held", six.natural, "clockwise");
+  // The rule both verified pads share: knobs on the right, slots row by row.
+  const twelve = LAYOUTS.find(l => l.keys === 12 && l.knobs === 2);
+  eq("the 12-key pad with its knobs on the right is row-major too",
+     gridOrder({ ...twelve, orientation: "clockwise" }).join(), Array.from({ length: 12 }, (_, i) => i + 1).join());
+}
+
 console.log("\nreport framing comes from the descriptor");
 {
   // Chrome refuses a write before it reaches the device when framing and
@@ -528,7 +583,7 @@ console.log("\nprotocol dialects");
 
   eq("we implement ch57x-1", IMPLEMENTED_DIALECT, "ch57x-1");
   const other = MODELS.filter(m => m.dialect !== IMPLEMENTED_DIALECT);
-  eq("  2 models speak a format other than the tested one", other.length, 2);
+  eq("  3 models speak a format other than the tested one", other.length, 3);
   // Every dialect a model claims must have capabilities, or effCaps() silently
   // falls back to the tested one and we would write the wrong format.
   for (const m of MODELS)
@@ -538,12 +593,23 @@ console.log("\nprotocol dialects");
   for (const [id, c] of Object.entries(DIALECT_CAPS))
     eq(`  ${id}: keys stop below the knob base`, c.maxKeys < c.knobBase, true);
   eq("1189:8851 (from the 2025 vendor build)", modelFor(0x1189, 0x8851).dialect, "ch57x-1");
-  eq("  7 models total", MODELS.length, 7);
+  eq("  8 models total", MODELS.length, 8);
   // Every model's vendor must be one the picker will offer, or it is unreachable.
   eq("every model's vendor is in the filter",
      MODELS.every(m => VENDOR_IDS.includes(m.vid)), true);
-  eq("no duplicate vendor/product pairs",
-     new Set(MODELS.map(m => `${m.vid}:${m.pid}`)).size, MODELS.length);
+  // A USB id may be shared — 1189:8890 is several different keypads — but
+  // only if the product name tells them apart, and each id has exactly one
+  // entry without a product name to fall back on. Otherwise the lookup is
+  // ambiguous and the wrong format gets sent in silence.
+  eq("no duplicate vendor/product/name entries",
+     new Set(MODELS.map(m => `${m.vid}:${m.pid}:${m.product || ""}`)).size, MODELS.length);
+  for (const id of new Set(MODELS.map(m => `${m.vid}:${m.pid}`)))
+    eq(`  ${id} has exactly one fallback entry`,
+       MODELS.filter(m => `${m.vid}:${m.pid}` === id && !m.product).length, 1);
+  eq("an LCKEY is LCTECH's format",          modelFor(0x1189, 0x8890, "LCKEY").dialect, "lctech");
+  eq("  even with stray whitespace",          modelFor(0x1189, 0x8890, "LCKEY ").dialect, "lctech");
+  eq("  any other 1189:8890 is Alternative A", modelFor(0x1189, 0x8890, "HID 1189:8890").dialect, "ch57x-2");
+  eq("  as is one with no name at all",       modelFor(0x1189, 0x8890).dialect, "ch57x-2");
 }
 
 

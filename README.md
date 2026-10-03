@@ -92,9 +92,10 @@ from the dropdown.
 
 ## Verified models
 
-All 22 are supported. The layout is read from the keypad, but the **grid shape** —
-how the keys are physically arranged, and therefore which slot is which key — has
-only been checked on one unit so far. The rest is inferred.
+Every shape below is supported. The layout is read from the keypad where it can
+be, but the **grid shape** — how the keys are physically arranged, and therefore
+which slot is which key — has only been checked on the units marked *yes*. The
+rest is inferred.
 
 **If your model shows a dash, a one-minute check helps everyone:** connect, and
 see whether the on-screen grid matches your hardware. Either answer is useful —
@@ -114,7 +115,7 @@ marked confirmed, or corrected.
 | 4 | 3 | 4×1 | — |
 | 5 | 0 | 5×1 | — |
 | 6 | 0 | 3×2 | — |
-| 6 | 1 | 3×2 | — |
+| 6 | 1 | 2×3 | yes — 1189:8890, reported by @wtown42; held knob-right it is 3×2 |
 | 6 | 2 | 3×2 | — |
 | 9 | 2 | 3×3 | — |
 | 9 | 3 | 3×3 | — |

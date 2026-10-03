@@ -57,19 +57,22 @@ includes the report ID as byte 0 of a read while WebHID does not, so **offsets
 shift by one between the two APIs**. All offsets below are WebHID payload
 offsets, where byte 0 is the command.
 
-## Not one protocol — three dialects
+## Not one protocol — four dialects
 
 These keypads do not all speak the same protocol, and the split does not follow
 vendor or product id alone:
 
-| Dialect | Devices | Write command |
-|---|---|---|
-| **ch57x-1** | `1189:8840`, `1189:8842`, `1189:8850`, `514c:8851` | `0xFE` |
-| ch57x-2 | `1189:8890` | different framing |
-| ch57x-3 | `514c:8850` | `0xFD` |
+| Dialect | In the app | Devices | Write command | On hardware |
+|---|---|---|---|---|
+| **ch57x-1** | Standard | `1189:8840`, `1189:8842`, `1189:8850`, `514c:8851` | `0xFE` | yes |
+| ch57x-2 | Alternative A | `1189:8890` | different framing | key bindings, one pad ([#4](https://github.com/jvspier/macropad-rebind/issues/4)) |
+| ch57x-3 | Alternative B | `514c:8850` | `0xFD` | no |
+| lctech | Alternative C | `1189:8890` reporting as **"LCKEY"** | one report per binding | no |
 
 Note that **`1189:8850` and `514c:8850` share a product id and differ** — so any
-dispatch has to key on the pair, not on the product id.
+dispatch has to key on the pair, not on the product id. And **`1189:8890` is not
+one keypad**: LCTECH's 3-key pad with an LCD uses that id for a format of its
+own, so for that id the product name decides.
 
 Everything documented below is **ch57x-1**, confirmed against a `1189:8842`.
 
@@ -173,6 +176,45 @@ outlier. macroknob also confirms slot ids — keys from `0x01`, knob at
 | keyboard byte 1 | `(layer+1)<<4 \| kind` | `kind` alone |
 | LED sub-command | `0xB0 0x18 <mode>` | `0xB0 0x08 <mode>` |
 | LED finish | `AA A1` | `AA AA` |
+
+### lctech (1189:8890, "LCKEY")
+
+Decoded from LCTECH's own configurator, **LCSKB 1.23.12.13** (艾尔赛 / Shenzhen LC
+Technology), which a user obtained from their seller together with the product
+sheet for a *3-button custom keyboard with LCD*: three keys, one knob, a 0.96"
+screen. The facts below were read out of the binary; none of its code is used, and
+it is not redistributed here.
+
+It looks for `1189:8890` and opens the path containing **`mi_01` — interface 1**.
+It uses hidapi and only ever writes: there is no read and no commit. Each binding is
+one 12-byte output report, **with no report id**:
+
+    [0]     type     1 key, 2 media, 3 mouse   (6 = factory reset)
+    [1]     layer    1..3
+    [2]     slot     keys 1..9; knob k, action a -> 101 + 3k + a
+                     (actions ccw, press, cw — the configurator's ←, ^, →)
+    [3]     0
+    [4..11] payload
+
+| Type | Payload |
+|---|---|
+| key | `[modifiers, 0, usage, 0, 0, 0, 0, 0]` — a plain HID keyboard report, so **one combination per key**, never a sequence. Modifier bits are standard (Ctrl 1, Shift 2, Alt 4, Win 8); the keycode is the HID usage. |
+| media | a 32-bit little-endian **bit mask**, not a usage code: prev 0, next 1, play/pause 3, mute 4, vol+ 7, vol− 8, mail 14, calculator 15, "file explorer" 16, "explorer" 18 |
+| mouse | `[buttons, 0, 0, wheel]` — left 1, right 2, middle 4; wheel ±1 |
+| reset | `[6, 0 …]` — layer and slot unset. The app never sends it. |
+
+The app matches "file explorer" to My computer (`0x194`) and "explorer" to Browser
+home (`0x223`) by name alone; those two are the least certain mappings here.
+
+The factory reset is the only destructive command in the format, and it is not a
+bootloader command. Nothing in LCSKB sends `0xEF`.
+
+Two things this settled. It explains issue #3: that "LCKEY" declares no report
+ids, so the report-id-3 writes every other format uses were refused by Chrome
+before they left the browser. And it shows that for a report-id-less device the
+first data byte is **not** necessarily `0x03`: LCTECH's messages begin with their
+type. The app now moves `0x03` into the data only for the ch57x formats, and that
+heuristic is itself still unconfirmed on hardware.
 
 ### But the vendor software for 8890 uses the ch57x-1 format
 
@@ -410,6 +452,23 @@ layer.
 Knob 1 (slots 16–18) is the **left** knob. Verified on hardware — it is not
 something you can infer from a config where both knobs are bound to volume.
 
+### One rule, two pads
+
+Held with its knobs **on the right**, this pad numbers its keys row by row from
+the top-left: `1 2 3 4 / 5 6 7 8 / 9 10 11 12`. That is the vendor manual's view
+above, and it is the same numbering as "up each column from the bottom-left" seen
+with the knobs on top.
+
+A second, unrelated pad agrees. A 6-key, 1-knob `1189:8890`, whose keycaps are
+printed to be held 3 wide with the knob on the right, reads `1 2 3 / 4 5 6` held
+that way — established from three separate runs by @wtown42
+([#4](https://github.com/jvspier/macropad-rebind/issues/4)) that all agree. In the
+app's knob-on-top frame that is a 2×3 grid, not the 3×2 the app had assumed, and
+the layout now opens rotated to how it is meant to be held.
+
+Two pads is a pattern, not a law. The other shapes are still unverified, and the
+orientation control remains the way to correct one.
+
 ## Lighting
 
 The entire lighting interface is one byte: `(colour << 4) | mode` at offset 11 of
@@ -587,22 +646,10 @@ then re-read the device. Sending it bare leaves the lighting half-configured.
 
 ## Grid shapes by model
 
-Only 12 keys / 2 knobs has been checked against a real unit. The rest are the
-documented shapes for those models, and the app lets you correct the grid if
-your hardware disagrees.
-
-| Keys | Knobs | Grid |
-|---|---|---|
-| 2 | 0 | 2×1 |
-| 3 | 1 | 3×1 |
-| 4 | 0 or 1 or 3 | 4×1 |
-| 5 | 0 | 5×1 |
-| 6 | 0, 1 or 2 | 3×2 |
-| 9 | 2 or 3 | 3×3 |
-| 11 | 3 | 4×3 |
-| 12 | 2 | 3×4 |
-| 12 | 3 | 4×3 |
-| 15 | 3 | 5×3 |
+The full list, and which shapes have been confirmed on real hardware, is the model
+table in the [README](../README.md#verified-models). It is generated from the
+app's own layout list and a test fails if the two drift apart, so it is kept
+there rather than copied here — this table used to be a copy, and it went stale.
 
 ## Credits
 

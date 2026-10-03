@@ -466,6 +466,10 @@ const MODELS = [
   { vid: 0x1189, pid: 0x8850, dialect: "ch57x-1" },
   { vid: 0x1189, pid: 0x8851, dialect: "ch57x-1" },   // from the 2025 vendor build
   { vid: 0x514C, pid: 0x8851, dialect: "ch57x-1" },
+  // 1189:8890 is not one keypad. LCTECH's 3-key pad with the LCD reports itself
+  // as "LCKEY" and speaks its own format; the same id on other pads speaks
+  // Alternative A (confirmed on a 6-key one). The product name decides.
+  { vid: 0x1189, pid: 0x8890, product: "LCKEY", dialect: "lctech" },
   { vid: 0x1189, pid: 0x8890, dialect: "ch57x-2" },
   { vid: 0x514C, pid: 0x8850, dialect: "ch57x-3" },
 ];
@@ -478,6 +482,7 @@ const DIALECT_LABEL = {
   "ch57x-1": "Standard",
   "ch57x-2": "Alternative A",
   "ch57x-3": "Alternative B",
+  "lctech":  "Alternative C",
 };
 const dialectName = d => DIALECT_LABEL[d] || d;
 
@@ -486,16 +491,27 @@ const dialectName = d => DIALECT_LABEL[d] || d;
    repair are all unavailable there — it can only be written to, blind. */
 const DIALECT_CAPS = {
   "ch57x-1": { write: true, read: true,  led: true,  maxKeys: 15, knobBase: 16, maxSteps: 18, delay: true,  tested: true  },
-  "ch57x-2": { write: true, read: false, led: false, maxKeys: 12, knobBase: 13, maxSteps: 5,  delay: false, tested: false },
+  // Key bindings confirmed on a 6-key 1189:8890 by @wtown42 (issue #4). Knobs,
+  // media keys and mouse actions have not been checked on hardware yet.
+  "ch57x-2": { write: true, read: false, led: false, maxKeys: 12, knobBase: 13, maxSteps: 5,  delay: false, tested: false,
+               confirmed: "key bindings, on one keypad so far" },
   // maxSteps is the limit for plain text. This format stores one entry per
   // keycode *and* one per modifier, capped at CH3_MAX_ENTRIES, so a macro using
   // modifiers runs out sooner. Pre-flight catches that and names the key, which
   // is more useful than pretending a single number covers both cases.
   "ch57x-3": { write: true, read: false, led: false, maxKeys: 16, knobBase: 17, maxSteps: 18, delay: true,  tested: false },
+  // LCTECH's own format; see lcReports. One key combination per key, knob
+  // slots from 101, no read-back, and no 0x03 in front of anything: the
+  // vendor's configurator sends its type byte first. It also never sends the
+  // all-zero wake-up the other formats get, so neither do we.
+  "lctech":  { write: true, read: false, led: false, maxKeys: 9,  knobBase: 101, maxSteps: 1, delay: false, tested: false,
+               prefix: false, wake: false },
 };
 
-function modelFor(vid, pid) {
-  return MODELS.find(m => m.vid === vid && m.pid === pid) || null;
+function modelFor(vid, pid, product) {
+  const same = MODELS.filter(m => m.vid === vid && m.pid === pid);
+  return same.find(m => m.product && m.product === (product || "").trim())
+      || same.find(m => !m.product) || null;
 }
 
 const CMD_WRITE  = 0xFE;
@@ -730,7 +746,12 @@ const LAYOUTS = [
   { keys:  4, knobs: 3, cols: 4, rows: 1 },
   { keys:  5, knobs: 0, cols: 5, rows: 1 },
   { keys:  6, knobs: 0, cols: 3, rows: 2 },
-  { keys:  6, knobs: 1, cols: 3, rows: 2 },
+  /* Verified on a 1189:8890 by @wtown42 (issue #4), three runs, all agreeing.
+     It is 2 wide by 3 tall with the knob on top, which is how this app draws
+     every pad; its keycaps are printed to be held with the knob on the right,
+     hence `natural`. Held that way its slots run row by row from the top-left
+     — and so do the 12-key pad's, held with its knobs on the right. */
+  { keys:  6, knobs: 1, cols: 2, rows: 3, natural: "clockwise" },
   { keys:  6, knobs: 2, cols: 3, rows: 2 },
   { keys:  9, knobs: 2, cols: 3, rows: 3 },
   { keys:  9, knobs: 3, cols: 3, rows: 3 },
@@ -869,7 +890,11 @@ function loadLayout() {
     if (!raw) return { ...DEFAULT_LAYOUT };
     const l = JSON.parse(raw);
     if (![l.keys, l.knobs, l.cols, l.rows].every(n => Number.isInteger(n) && n >= 0)) throw 0;
-    return l;
+    // The saved copy only records which model and how it is held. Its shape
+    // comes from LAYOUTS, so a corrected shape reaches people who saved the
+    // old one — the 6-key layout was 3x2 until issue #4 showed it is 2x3.
+    const known = findLayout(l.keys, l.knobs);
+    return known ? { ...known, orientation: l.orientation || known.natural || "normal" } : l;
   } catch { return { ...DEFAULT_LAYOUT }; }
 }
 function saveLayout() {
@@ -877,8 +902,9 @@ function saveLayout() {
 }
 function setLayout(l) {
   // Orientation is a property of how the user has placed their pad, not of the
-  // model, so it survives a model change.
-  layout = { orientation: layout?.orientation || "normal", ...l };
+  // model, so it survives a model change — unless the model is known to be
+  // meant to be held some other way, in which case that is the better start.
+  layout = { ...l, orientation: l.natural || layout?.orientation || "normal" };
   saveLayout();
 }
 function setOrientation(o) { layout = { ...layout, orientation: o }; saveLayout(); }
@@ -1069,6 +1095,7 @@ function bindingReports(slot, b) {
   const d = effDialect();
   if (d === "ch57x-2") return ch2Reports(slot, b, layer);
   if (d === "ch57x-3") return ch3Reports(slot, b, layer);
+  if (d === "lctech")  return lcReports(slot, b, layer);
 
   const head = [CMD_WRITE, slot, layer + 1];
   let m;
@@ -1122,6 +1149,62 @@ function bindingReports(slot, b) {
   reports.push(msg([CMD_COMMIT, 0xFE, 0xFF]));
   reports.push(msg([CMD_SEP, CMD_SEP]));
   return reports;
+}
+
+/* ------------------------------------------------------------------
+   LCTECH encoder ("Alternative C", 1189:8890 reporting as "LCKEY").
+
+   Decoded from LCTECH's own configurator, LCSKB 1.23.12.13, which a user
+   obtained from their seller. Facts only — none of its code is used and the
+   binary is not distributed. It opens interface 1 of 1189:8890 and writes
+   one 12-byte output report per binding, with no report id, no commit and
+   no read-back:
+
+       [0] type     1 key, 2 media, 3 mouse  (6 = factory reset; never sent)
+       [1] layer    1..3
+       [2] slot     keys 1..9; knob k, action a -> 101 + 3k + a
+       [3] 0
+       [4..11]      key:   [modifiers, 0, HID usage, 0, 0, 0, 0, 0]
+                    media: 32-bit little-endian bit mask, below
+                    mouse: [buttons, 0, 0, wheel]
+
+   A key holds one combination, not a sequence: the payload is a plain HID
+   keyboard report. The modifier bits are the standard ones (the configurator
+   adds 1/2/4/8 for Ctrl/Shift/Alt/Win) and the keycode is the HID usage (it
+   maps 'A' to 0x04, '1' to 0x1E, F1 to 0x3A).
+   ------------------------------------------------------------------ */
+// Media is a bit in the device's own consumer report, not a usage code. The
+// configurator offers exactly these ten. "File explorer" and "Explorer" are
+// matched to My computer and Browser home by name, and are the least certain.
+const LC_MEDIA_BIT = new Map([
+  [0xb6, 0],  [0xb5, 1],  [0xcd, 3],  [0xe2, 4],  [0xe9, 7],  [0xea, 8],
+  [0x18a, 14], [0x192, 15], [0x194, 16], [0x223, 18],
+]);
+
+function lcReports(slot, b, layerIdx) {
+  const head = [layerIdx + 1, slot, 0];
+  if (b.type === "key") {
+    if (b.steps.length > 1)
+      throw new Error(`this keypad stores one key combination per key, not a sequence of ${b.steps.length}`);
+    if (b.delay > 0) throw new Error("inter-step delay is not supported on this device");
+    const st = b.steps[0] || { mods: 0, code: 0 };
+    return [msg([1, ...head, st.mods & 0xff, 0, st.code || 0, 0, 0, 0, 0, 0])];
+  }
+  if (b.type === "media") {
+    const bit = LC_MEDIA_BIT.get(b.media);
+    if (bit === undefined) throw new Error("this media key is not one this keypad offers");
+    const v = 2 ** bit;
+    return [msg([2, ...head, v & 0xff, (v >>> 8) & 0xff, (v >>> 16) & 0xff, (v >>> 24) & 0xff, 0, 0, 0, 0])];
+  }
+  if (b.type === "mouse") {
+    if (b.action === "click") {
+      if (![1, 2, 4].includes(b.buttons)) throw new Error("only left, right and middle clicks are supported on this device");
+      return [msg([3, ...head, b.buttons, 0, 0, 0, 0, 0, 0, 0])];
+    }
+    if (b.action === "wheel") return [msg([3, ...head, 0, 0, 0, i8(b.wheel), 0, 0, 0, 0])];
+    throw new Error(`mouse ${b.action} is not supported on this device`);
+  }
+  throw new Error("this binding cannot be written to this keypad");
 }
 
 /* ------------------------------------------------------------------
@@ -1454,8 +1537,10 @@ async function connect(broad) {
     // ch57x-keyboard-tool sends an all-zero report right after claiming the
     // interface, before anything else. Harmless (0x00 is not a command) and
     // apparently needed by some units, so do the same.
-    try { const w = frame(new Uint8Array(REPORT_LEN), framing);
-          await device.sendReport(w.id, w.data); } catch { /* not fatal */ }
+    const early = modelFor(device.vendorId, device.productId, device.productName);
+    if (DIALECT_CAPS[early?.dialect]?.wake !== false)
+      try { const w = frame(new Uint8Array(REPORT_LEN), framing);
+            await device.sendReport(w.id, w.data); } catch { /* not fatal */ }
     setStatus("connected", "on");
     log(`Opened ${device.productName || "keypad"} — ` +
         `${(device.vendorId || 0).toString(16).padStart(4,"0")}:` +
@@ -1498,7 +1583,7 @@ async function connect(broad) {
     // device accepts well-formed messages in the wrong language and stores
     // nothing useful. Every dialect in MODELS has an entry in DIALECT_CAPS
     // (a test enforces it), so effCaps() always has something to return.
-    const model = modelFor(device.vendorId, device.productId);
+    const model = modelFor(device.vendorId, device.productId, device.productName);
     dialect = model ? model.dialect : IMPLEMENTED_DIALECT;
     const caps = effCaps();
     // Knob slots may be numbered differently here than on the last keypad.
@@ -1506,7 +1591,11 @@ async function connect(broad) {
 
     if (dialect !== IMPLEMENTED_DIALECT) {
       formatHintShown = true;
-      log(`Your keypad speaks a different command format from the one this tool has ` +
+      log(caps.confirmed
+        ? `Your keypad speaks a different command format from the one this tool was ` +
+          `built against. It has been confirmed on real hardware for ` +
+          `${caps.confirmed}; other functions are less certain.`
+        : `Your keypad speaks a different command format from the one this tool has ` +
           `been tested against. Support for it was written from other people's ` +
           `research and has never been tried on real hardware.`, "w");
       log(`You can still write to it, but at your own risk: this format has no way ` +
@@ -1616,7 +1705,10 @@ async function collect(want, ms) {
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 async function send(report, label) {
-  const { id, data } = frame(report, framing);
+  // The 0x03 moved into the data for report-id-less devices belongs to the
+  // ch57x formats. LCTECH's messages start with their own type byte.
+  const f = effCaps().prefix === false ? { ...framing, prefix: null } : framing;
+  const { id, data } = frame(report, f);
   try {
     await device.sendReport(id, data);
   } catch (e) {

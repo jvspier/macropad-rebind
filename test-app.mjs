@@ -99,7 +99,7 @@ const windowStub = { addEventListener() {} };
    reply share one layout — only byte 0 differs, 0xFE vs 0xFA — so replaying a
    stored write means swapping that byte and nothing else. */
 function makeDevice({ keys = 12, knobs = 2, pid = 0x8842, knobSlotList = null,
-                      descriptor = null, usagePage = 0xff00 } = {}) {
+                      descriptor = null, usagePage = 0xff00, productName = "USB Composite Device" } = {}) {
   const listeners = [];
   const sent = [];
   // `descriptor` ({ inputReports, outputReports, featureReports }) makes this
@@ -135,7 +135,7 @@ function makeDevice({ keys = 12, knobs = 2, pid = 0x8842, knobSlotList = null,
     for (const cb of listeners) cb({ reportId: bare ? 0 : 3, data });
   };
   return {
-    vendorId: 0x1189, productId: pid, productName: "USB Composite Device",
+    vendorId: 0x1189, productId: pid, productName,
     opened: false, collections: [{ usagePage, usage: 1, ...(descriptor || {}) }],
     refused: 0,
     sent,
@@ -185,7 +185,7 @@ const app = new Function(
   script + "\nreturn { connect, writeAll, readAll, detect, bindingReports, preflight, " +
            "alignKnobBase, slotName, knobBase, knobSlotIn, knobAt, readCommand, " +
            "select, renderAll, renderLayoutPick, " +
-           "posOfSlot, disconnected, LAYOUTS, effDialect, " +
+           "posOfSlot, disconnected, LAYOUTS, effDialect, loadLayout, " +
            "setForced: d => { forcedDialect = d; }, setLayout, " +
            "profile: () => profile, setProfile: p => { profile = p; }, " +
            "layoutOf: () => layout, dialectOf: () => dialect, $ };"
@@ -496,6 +496,44 @@ await app.connect(false);
 ok("the normal search still asks for the vendor page only",
    lastFilters.every(f => f.usagePage === 0xff00 && VENDOR_IDS_FOR_TEST.includes(f.vendorId)));
 app.disconnected();
+
+console.log("\nan LCKEY gets LCTECH's own format, end to end");
+// Decoded from the vendor's configurator: no report ids, one 12-byte report
+// per binding starting with its type byte, no commit, no wake-up. The mock
+// refuses mis-framed writes the way Chrome does.
+const lc = makeDevice({ pid: 0x8890, productName: "LCKEY",
+  descriptor: { outputReports: [{ reportId: 0, items: [{ reportSize: 8, reportCount: 12 }] }] } });
+current = lc; app.disconnected();
+const beforeLc = logText().length;
+await app.connect(false);
+eq("the format is chosen from the product name", app.effDialect(), "lctech");
+eq("nothing was sent on connect (no wake-up)", lc.sent.length, 0);
+app.setLayout(app.LAYOUTS.find(l => l.keys === 3 && l.knobs === 1));
+const pl = app.profile();
+for (const l of pl.layers) l.bindings = {};
+pl.layers[0].bindings[1] = { type: "key", steps: [{ mods: 0x01, code: 0x06 }], delay: 0 };
+pl.layers[1].bindings[2] = { type: "media", media: 0xe9 };
+app.alignKnobBase();
+await app.writeAll();
+eq("the browser refused nothing", lc.refused, 0);
+eq("one report per binding, nothing else", lc.sent.length, 2);
+eq("  each 12 bytes, no report id", lc.sent.every(r => r.id === 0 && r.raw.length === 12), true);
+eq("  Ctrl+C as LCTECH writes it", lc.sent[0].raw.join(), [1, 1, 1, 0, 1, 0, 6, 0, 0, 0, 0, 0].join());
+eq("  volume up on layer 2", lc.sent[1].raw.join(), [2, 2, 2, 0, 0x80, 0, 0, 0, 0, 0, 0, 0].join());
+eq("  and no ch57x commands at all",
+   lc.sent.some(r => [0xfe, 0xfd, 0xaa, 0xfa, 0xfb, 0x03].includes(r.raw[0])), false);
+current = device; app.disconnected();
+
+console.log("\nthe 6-key layout opens the way it is held, and old saves are corrected");
+app.setLayout(app.LAYOUTS.find(l => l.keys === 6 && l.knobs === 1));
+eq("picking it starts knob-right (clockwise)", app.layoutOf().orientation, "clockwise");
+store.set("macropad-rebind.layout.v1",
+  JSON.stringify({ keys: 6, knobs: 1, cols: 3, rows: 2, orientation: "clockwise" }));
+const reloaded = app.loadLayout();
+eq("a layout saved with the old 3x2 shape loads as 2x3", `${reloaded.cols}x${reloaded.rows}`, "2x3");
+eq("  keeping how it was held", reloaded.orientation, "clockwise");
+app.setLayout(app.LAYOUTS.find(l => l.keys === 12 && l.knobs === 2));
+app.setOrientation?.("normal");
 
 console.log("\nknob bindings follow the dialect's numbering");
 // Slot numbers are what gets persisted, and a knob's slot depends on the
