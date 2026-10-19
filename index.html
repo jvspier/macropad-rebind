@@ -104,8 +104,8 @@ main{
   background:linear-gradient(180deg,#101317,#0b0d10);
   border-radius:4px;border:1px solid var(--line-soft);
 }
-.knobs{display:flex;gap:2.2rem;justify-content:center;flex-wrap:wrap}
-.knob{display:flex;flex-direction:column;align-items:center;gap:.45rem}
+.knobs{display:flex;gap:1.2rem 1.5rem;justify-content:center;flex-wrap:wrap}
+.knob{display:flex;flex-direction:column;align-items:center;gap:.45rem;width:8.4rem}
 .knob-dial{
   width:74px;height:74px;border-radius:50%;
   background:radial-gradient(circle at 38% 30%,#3a4149,#171a1e 70%);
@@ -114,20 +114,24 @@ main{
   box-shadow:0 4px 14px rgba(0,0,0,.5);
 }
 .knob-dial::after{content:"";position:absolute;top:7px;width:2px;height:16px;border-radius:1px;background:#c3ccd6}
-.knob-dial button{
-  width:38px;height:38px;border-radius:50%;padding:0;
-  font-family:var(--mono);font-size:.62rem;
-  background:#0f1215;border:1px solid #2e353d;color:var(--ink-2);
+/* Each knob lists its three actions in the order they happen on the hardware —
+   turn left, press, turn right — each showing what it is bound to, the way a
+   keycap does, so nothing hides behind a hover tooltip. */
+.knob-acts{display:flex;flex-direction:column;gap:.25rem;width:100%}
+button.knob-act{
+  display:flex;align-items:center;gap:.4rem;width:100%;
+  padding:.3rem .45rem;text-align:left;
+  font-family:var(--mono);font-size:.7rem;line-height:1.3;
+  background:#0f1215;border:1px solid #2b3138;
 }
-.knob-dial button.bound{border-color:var(--led);color:var(--led)}
-.knob-dial button.sel{background:var(--led);border-color:var(--led);color:#fff}
-.knob-rot{display:flex;gap:.35rem}
-.knob-rot button{
-  font-family:var(--mono);font-size:.66rem;padding:.22rem .5rem;min-width:44px;
-  background:#0f1215;
-}
-.knob-rot button.bound{border-color:var(--led);color:var(--led)}
-.knob-rot button.sel{background:var(--led);border-color:var(--led);color:#fff}
+button.knob-act .g{flex:none;width:1em;text-align:center;color:var(--dim)}
+button.knob-act .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
+button.knob-act.empty .t{color:var(--dim);font-style:italic}
+button.knob-act.bound{border-color:var(--led-dim)}
+button.knob-act.bound .g{color:var(--led)}
+button.knob-act.sel{background:var(--led);border-color:var(--led)}
+button.knob-act.sel .g,button.knob-act.sel .t{color:#fff}
+@media (max-width:480px){ .knobs{gap:1rem} .knob{width:calc(50% - .5rem)} }
 .knob-label{font-family:var(--mono);font-size:.62rem;letter-spacing:.11em;text-transform:uppercase;color:var(--dim)}
 
 .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.55rem;width:min(100%,340px)}
@@ -471,6 +475,8 @@ const MODELS = [
   // Alternative A (confirmed on a 6-key one). The product name decides.
   { vid: 0x1189, pid: 0x8890, product: "LCKEY", dialect: "lctech" },
   { vid: 0x1189, pid: 0x8890, dialect: "ch57x-2" },
+  // Not every unit with this id speaks ch57x-3: a 12-key, 4-knob one answers 0xFB
+  // like the standard format, and connect() moves it there. See docs/PROTOCOL.md.
   { vid: 0x514C, pid: 0x8850, dialect: "ch57x-3" },
 ];
 const IMPLEMENTED_DIALECT = "ch57x-1";
@@ -1609,14 +1615,14 @@ async function connect(broad) {
     // with that id answers 0xFB and 0xFA exactly like the standard format, and
     // so was left with Read and lighting switched off for no reason. A keypad
     // that answers the standard identify command with a layout the standard
-    // format can address is speaking it, whatever the table says. Only the
-    // formats with no read command are asked (nothing to lose: 0xFB is a read),
-    // and LCTECH's is left alone because it never expects anything but its own
-    // reports.
+    // format can address is speaking it, whatever the table says. 0xFB is a
+    // read, so asking costs nothing. Only ch57x-3 is asked, on purpose: that is
+    // the format with evidence against it. ch57x-2 (1189:8890) has key bindings
+    // confirmed on hardware and its format is already disputed, so it is not
+    // second-guessed here; LCTECH's expects nothing but its own reports.
     let found = null;
-    if (!forcedDialect && dialect !== IMPLEMENTED_DIALECT && dialect !== "lctech"
-        && !DIALECT_CAPS[dialect]?.read) {
-      const early = await detect();
+    if (!forcedDialect && dialect === "ch57x-3") {
+      const early = await detect(true);
       if (early && layoutFits(early, DIALECT_CAPS[IMPLEMENTED_DIALECT])) {
         log(`This keypad's USB id is listed under the "${dialectName(dialect)}" format, but it ` +
             `answers the standard read commands, so it is being treated as "` +
@@ -2016,10 +2022,19 @@ function clearEditor() {
   log(`Layer ${layer + 1} cleared in the editor. Nothing was sent to the keypad.`, "g");
 }
 
-async function detect() {
+/** Ask the keypad for its layout. With `strict`, only a reply that begins with
+    the command it answers (0xFB) counts: the caller is using the answer as
+    evidence of which format the keypad speaks, so a stray report that merely
+    happens to arrive in the same window must not pass for one. */
+async function detect(strict) {
   log("0xFB — identify layout (read only).", "w");
   const got = (await Promise.all([collect(1, 600), send(msg([0xFB, 0xFB, 0xFB]))]))[0];
   if (!got.length) { log("No reply.", "w"); return null; }
+  if (strict && got[0][0] !== 0xFB) {
+    log(`Reply does not begin with 0xFB (${hex(got[0].subarray(0, 4))}) — not an answer to the ` +
+        `identify command.`, "w");
+    return null;
+  }
   const keys = got[0][1], knobs = got[0][2];
   log(`Layout: ${keys} keys, ${knobs} knobs.`, "g");
   return { keys, knobs };
@@ -2231,39 +2246,42 @@ function renderGrid() {
 function renderKnobs() {
   const wrap = $("knobs");
   wrap.textContent = "";
+  const WHAT = { ccw: "turn left", press: "press", cw: "turn right" };
   knobOrder(layout).forEach((k, kpos) => {
     const box = document.createElement("div");
     box.className = "knob";
 
+    // The dial is decoration; the three actions below are the controls.
     const dial = document.createElement("div");
     dial.className = "knob-dial";
-    const pressSlot = knobSlot(k, 1);
-    const pb = document.createElement("button");
-    pb.type = "button";
-    pb.textContent = KNOB_GLYPH.press;
-    pb.className = (bindingFor(pressSlot) ? "bound" : "") + (sel?.slot === pressSlot ? " sel" : "");
-    pb.title = `Knob ${kpos + 1} press — ` + bindingLabel(bindingFor(pressSlot));
-    pb.onclick = () => select(pressSlot, `Knob ${kpos + 1} press`);
-    dial.append(pb);
-
-    const rot = document.createElement("div");
-    rot.className = "knob-rot";
-    for (const a of [0, 2]) {
-      const slot = knobSlot(k, a);
-      const rb = document.createElement("button");
-      rb.type = "button";
-      rb.textContent = KNOB_GLYPH[KNOB_ACTIONS[a]];
-      rb.className = (bindingFor(slot) ? "bound" : "") + (sel?.slot === slot ? " sel" : "");
-      rb.title = `Knob ${kpos + 1} ${KNOB_ACTIONS[a]} — ` + bindingLabel(bindingFor(slot));
-      rb.onclick = () => select(slot, `Knob ${kpos + 1} ${KNOB_ACTIONS[a]}`);
-      rot.append(rb);
-    }
 
     const lbl = document.createElement("span");
     lbl.className = "knob-label";
     lbl.textContent = "Knob " + (kpos + 1);
 
-    box.append(dial, rot, lbl);
+    const acts = document.createElement("div");
+    acts.className = "knob-acts";
+    KNOB_ACTIONS.forEach((name, a) => {
+      const slot = knobSlot(k, a);
+      const b = bindingFor(slot);
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "knob-act" + (b ? " bound" : " empty") + (sel?.slot === slot ? " sel" : "");
+      const g = document.createElement("span");
+      g.className = "g";
+      g.textContent = KNOB_GLYPH[name];
+      const t = document.createElement("span");
+      t.className = "t";
+      t.textContent = b ? bindingLabel(b) : "unset";
+      row.append(g, t);
+      // Long macros are cut with an ellipsis here; the full text is the tooltip.
+      row.title = `Knob ${kpos + 1} ${WHAT[name]} — ` + (b ? bindingLabel(b) : "unbound");
+      row.setAttribute("aria-label", row.title);
+      row.onclick = () => select(slot, `Knob ${kpos + 1} ${name}`);
+      acts.append(row);
+    });
+
+    box.append(dial, lbl, acts);
     wrap.append(box);
   });
 }

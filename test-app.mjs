@@ -98,7 +98,7 @@ const windowStub = { addEventListener() {} };
    Records are stored keyed by (layer, slot). The write message and the read
    reply share one layout — only byte 0 differs, 0xFE vs 0xFA — so replaying a
    stored write means swapping that byte and nothing else. */
-function makeDevice({ keys = 12, knobs = 2, pid = 0x8842, knobSlotList = null,
+function makeDevice({ keys = 12, knobs = 2, pid = 0x8842, vid = 0x1189, silent = false, fbByte = 0xfb, knobSlotList = null,
                       descriptor = null, usagePage = 0xff00, productName = "USB Composite Device" } = {}) {
   const listeners = [];
   const sent = [];
@@ -135,7 +135,7 @@ function makeDevice({ keys = 12, knobs = 2, pid = 0x8842, knobSlotList = null,
     for (const cb of listeners) cb({ reportId: bare ? 0 : 3, data });
   };
   return {
-    vendorId: 0x1189, productId: pid, productName,
+    vendorId: vid, productId: pid, productName,
     opened: false, collections: [{ usagePage, usage: 1, ...(descriptor || {}) }],
     refused: 0,
     sent,
@@ -154,7 +154,8 @@ function makeDevice({ keys = 12, knobs = 2, pid = 0x8842, knobSlotList = null,
       const raw = Array.from(data);
       const b = bare && raw[0] === 0x03 ? raw.slice(1) : raw;
       sent.push({ id, b, raw });
-      if (b[0] === 0xfb) { emit([0xfb, keys, knobs]); return; }
+      if (silent && (b[0] === 0xfb || b[0] === 0xfa)) return;
+      if (b[0] === 0xfb) { emit([fbByte, keys, knobs]); return; }
       if (b[0] === 0xfe && !this.deaf) {
         // b[1] slot, b[2] layer (1-based). Store it as the read reply.
         const layer = (b[2] || 1) - 1, slot = b[1];
@@ -562,6 +563,106 @@ eq("slot 16 is knob 1 ccw", app.slotName(16, pos), "knob 1 ccw");
 eq("slot 24 is knob 3 cw",  app.slotName(24, pos), "knob 3 cw");
 ok("a slot below the base is never a negative knob",
    !/knob 0|undefined/.test(app.slotName(13, pos)));
+
+console.log("\na USB id filed under another format, but the keypad answers the standard one");
+// 514c:8850 is listed as ch57x-3, which has no read or lighting command. A
+// 12-key, 4-knob unit with that id answers 0xFB and 0xFA like the standard
+// format, and was left with Read and lighting disabled. The keypad's own
+// answer should overrule the id table.
+const KNOBS4 = [0x10,0x11,0x12, 0x13,0x14,0x15, 0x16,0x17,0x18, 0x0D,0x0E,0x0F];
+const d8850 = makeDevice({ vid: 0x514c, pid: 0x8850, keys: 12, knobs: 4, knobSlotList: KNOBS4 });
+current = d8850; app.disconnected();
+const before8850 = logText().length;
+await app.connect(false);
+const log8850 = logText().slice(before8850);
+eq("it is treated as the standard format", app.effDialect(), "ch57x-1");
+ok("  and the log says why", /answers the standard read commands/.test(log8850));
+eq("  Read is enabled",            app.$("btnRead").disabled, false);
+eq("  Detect is enabled",          app.$("btnDetect").disabled, false);
+eq("  Apply lighting is enabled",  app.$("btnApplyLed").disabled, false);
+eq("  Write is enabled",           app.$("btnWrite").disabled, false);
+eq("  the 12+4 layout is adopted", `${app.layoutOf().keys}/${app.layoutOf().knobs}`, "12/4");
+ok("  no 'untested format' warning", !/never been tried on real hardware/.test(log8850));
+d8850.sent.length = 0;
+await app.readAll();
+eq("  a full read returns 24 records", Object.keys(app.profile().layers[0].bindings).length, 24);
+app.profile().layers[0].bindings[1] = { type: "key", steps: [{ mods: 0x01, code: 0x06 }], delay: 0 };
+d8850.sent.length = 0;
+const before8850w = logText().length;
+await app.writeAll();
+ok("  a write verifies", /Verified/.test(logText().slice(before8850w)));
+// 0xFD also begins the standard format's commit (FD FE FF); what marks the
+// other format is a 0xFD *binding*, whose second byte is a slot, not 0xFE.
+ok("  and was sent in the standard format (0xFE records), not as 0xFD bindings",
+   d8850.sent.some(r => r.b[0] === 0xfe) &&
+   !d8850.sent.some(r => r.b[0] === 0xfd && r.b[1] !== 0xfe));
+current = device; app.disconnected();
+
+console.log("\n  but a keypad that stays silent keeps the format its id says");
+const mute = makeDevice({ vid: 0x514c, pid: 0x8850, silent: true });
+current = mute; app.disconnected();
+await app.connect(false);
+eq("it stays ch57x-3", app.effDialect(), "ch57x-3");
+eq("  Read stays disabled", app.$("btnRead").disabled, true);
+eq("  Apply lighting stays disabled", app.$("btnApplyLed").disabled, true);
+eq("  Repair stays disabled (nothing answered)", app.$("btnRepair").disabled, true);
+ok("  only a wake-up and 0xFB were sent, no writes",
+   mute.sent.every(r => r.b.every(x => x === 0) || r.b[0] === 0xfb));
+console.log("\n  and picking a format by hand refreshes the controls");
+app.$("formatPick").onchange({ target: { value: "ch57x-1" } });
+eq("forcing Standard enables Read", app.$("btnRead").disabled, false);
+eq("  and Apply lighting", app.$("btnApplyLed").disabled, false);
+eq("  but not Repair — the keypad never answered", app.$("btnRepair").disabled, true);
+app.$("formatPick").onchange({ target: { value: "" } });
+eq("back to automatic disables Read again", app.$("btnRead").disabled, true);
+current = device; app.disconnected();
+
+console.log("\n  and so does one whose only reply is not an answer to 0xFB");
+const stray = makeDevice({ vid: 0x514c, pid: 0x8850, fbByte: 0xaa });
+current = stray; app.disconnected();
+const beforeStray = logText().length;
+await app.connect(false);
+eq("a reply not starting with 0xFB is not evidence", app.effDialect(), "ch57x-3");
+ok("  and the log says why", /does not begin with 0xFB/.test(logText().slice(beforeStray)));
+eq("  Read stays disabled", app.$("btnRead").disabled, true);
+current = device; app.disconnected();
+
+console.log("\n  and the probe is for 514c:8850 only: a 1189:8890 that answers 0xFB keeps its format");
+// 8890 has key bindings confirmed under ch57x-2 on real hardware, and its format
+// is disputed; being able to answer a read is not a reason to move it.
+const p8890 = makeDevice({ pid: 0x8890, productName: "6 Key Pad" });
+current = p8890; app.disconnected();
+await app.connect(false);
+eq("it stays ch57x-2", app.effDialect(), "ch57x-2");
+ok("  and 0xFB was never sent to it", !p8890.sent.some(r => r.b[0] === 0xfb));
+current = device; app.disconnected();
+
+console.log("\nknob bindings are shown on the knobs, not only in a tooltip");
+// Each knob lists turn-left, press and turn-right with what they are bound to,
+// the way a keycap does. They used to be bare glyphs with the binding in a
+// hover tooltip, so a pad's knobs could not be read at a glance.
+app.setLayout({ ...app.LAYOUTS.find(l => l.keys === 12 && l.knobs === 4), natural: "normal" });
+const kp = app.profile();
+for (const l of kp.layers) l.bindings = {};
+kp.layers[0].bindings[0x10] = { type: "key", steps: [{ mods: 0x01, code: 0x1d }], delay: 0 };  // knob 1 ccw: Ctrl+Z
+kp.layers[0].bindings[0x12] = { type: "media", media: 0xe9 };                                    // knob 1 cw: volume up
+kp.layers[0].bindings[0x0E] = { type: "key", steps: [{ mods: 0, code: 0x58 }], delay: 0 };       // knob 4 press: Num Enter
+app.renderAll();
+const rows = [];
+const collect = n => { if (!n) return;
+  if (/\bknob-act\b/.test(n.className || "")) rows.push(n);
+  (n.children || []).forEach(collect); };
+collect(app.$("knobs"));
+eq("four knobs, three actions each", rows.length, 12);
+eq("knob 1 turn left shows its shortcut",  rows[0].textContent.includes("Ctrl+Z"), true);
+eq("knob 1 turn right shows its media key", rows[2].textContent.includes("Volume up"), true);
+eq("knob 4 press shows its key (stored below the keys)", rows[10].textContent.includes("Num Enter"), true);
+eq("an unbound action says so", rows[1].textContent.includes("unset"), true);
+ok("  and is styled as empty", /\bempty\b/.test(rows[1].className));
+ok("a bound action is styled as bound", /\bbound\b/.test(rows[0].className));
+ok("the full text is still the tooltip", rows[0].title.includes("Ctrl+Z") && /turn left/.test(rows[0].title));
+rows[4].onclick();                               // knob 2 press
+eq("clicking a row selects that action", app.$("editorTitle").textContent, "Knob 2 press");
 
 console.log("\nan override does not outlive the keypad it was set for");
 app.setForced("ch57x-3");

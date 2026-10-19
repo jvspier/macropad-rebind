@@ -64,9 +64,9 @@ vendor or product id alone:
 
 | Dialect | In the app | Devices | Write command | On hardware |
 |---|---|---|---|---|
-| **ch57x-1** | Standard | `1189:8840`, `1189:8842`, `1189:8850`, `514c:8851` | `0xFE` | yes |
+| **ch57x-1** | Standard | `1189:8840`, `1189:8842`, `1189:8850`, `514c:8851`, and `514c:8850` on a 12-key, 4-knob unit (see below) | `0xFE` | yes |
 | ch57x-2 | Alternative A | `1189:8890` | different framing | key bindings, one pad ([#4](https://github.com/jvspier/macropad-rebind/issues/4)) |
-| ch57x-3 | Alternative B | `514c:8850` | `0xFD` | no |
+| ch57x-3 | Alternative B | `514c:8850`, on units that do not answer `0xFB` | `0xFD` | no |
 | lctech | Alternative C | `1189:8890` reporting as **"LCKEY"** | one report per binding | no |
 
 Note that **`1189:8850` and `514c:8850` share a product id and differ** — so any
@@ -90,10 +90,45 @@ The mapping comes from
 [ch57x-keyboard-tool](https://github.com/kriomant/ch57x-keyboard-tool)'s
 `SUPPORTED_DEVICES` table, which has separate implementations per dialect.
 
+### `514c:8850` is at least two different keypads
+
+That table files `514c:8850` under ch57x-3, and for the 4x4 pads it was written
+for that is presumably right. It is not right for every unit with that id. A
+12-key, 4-knob pad enumerating as "USB Composite Device" — one HID collection on
+usage page `0xFF00`, input and output report 3 at 64 bytes each — behaves as the
+Standard format in every respect tried:
+
+| Sent | Result |
+|---|---|
+| `FB FB FB` | replies `FB 0C 04`: 12 keys, 4 knobs |
+| `FA 0F 03 <layer>` | 24 records in the Standard layout: slots 1–12, the fourth encoder at `0x0D`–`0x0F`, then `0x10`–`0x18` |
+| `FE` records, each followed by `AA AA` / `FD FE FF` / `AA AA` | 72 bindings written (24 slots × 3 layers) and read back matching the editor |
+| `FE B0 <layer+1> 08 00 00 00 00 00 01 00 <code>`, then `FD FE FF` | backlight changes, separately for each layer |
+
+The slot arrangement is the one the README's model table gives for the 12-key,
+4-encoder SikaiCase `1189:8842`: three encoders at `0x10`–`0x18` and the fourth
+stored below the keys, which only answers to a read addressed as 15 keys and 3
+knobs.
+
+An id table cannot tell the two kinds of `514c:8850` apart, so the app asks. For
+an id filed under ch57x-3 it sends `0xFB`, which is a read and changes nothing.
+If the reply begins with `0xFB` and
+gives a layout the Standard format can address — at most 15 keys and 4 knobs, at
+least one of either — the keypad is treated as Standard for that connection. A
+keypad that stays silent, or answers with anything else, keeps the format its id
+says. No other format is asked: `1189:8890` has key bindings confirmed under
+ch57x-2 and a disputed format already, so it is left as it is, and LCTECH's
+expects nothing but its own reports.
+
+A real ch57x-3 pad is expected to stay silent, which is what keeps this safe,
+but nobody here has one to confirm it. If you have one, the log line "Reply does
+not begin with 0xFB" or "No reply" on connect is the thing to report.
+
 ### ch57x-3 (514C:8850)
 
 Ported here from ch57x-keyboard-tool's `k8850_4x4.rs` and **not verified against
-hardware** — nobody working on this has one. Payload offsets below exclude the
+hardware** — nobody working on this has a unit that speaks it. (The one
+`514c:8850` pad that was tried speaks the Standard format; see above.) Payload offsets below exclude the
 report id, as elsewhere.
 
     [0]     0xFD          write

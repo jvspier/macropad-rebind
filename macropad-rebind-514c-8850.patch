@@ -1,0 +1,502 @@
+diff -ruN a/README.md b/README.md
+--- a/README.md	2026-10-19 09:15:58.835497486 +0000
++++ b/README.md	2026-10-19 09:15:58.841189887 +0000
+@@ -62,7 +62,8 @@
+ a report is enough to get it added.
+ 
+ > **Not every model takes the same commands.** Three command formats exist and
+-> the right one is chosen automatically from your keypad's USB id. You should
++> the right one is chosen automatically from your keypad's USB id, and corrected
++> if the keypad answers the identify command like a Standard one. You should
+ > never have to think about this — but if your keys do not respond after writing,
+ > a dropdown appears next to the model picker that sends a different format.
+ >
+@@ -70,7 +71,8 @@
+ > |---|---|
+ > | `1189:8840`, `1189:8842`, `1189:8850`, `1189:8851`, `514c:8851` | Everything works. This is the format the tool was built and tested against. |
+ > | `1189:8890` | Writing works in principle, but is untested and sources disagree about this model — try both formats. No backlight control, and the tool cannot read the keypad back. |
+-> | `514c:8850` | Writing works in principle, but is untested. No backlight control, and no read-back. |
++> | `514c:8850`, 12 keys and 4 knobs | Everything works: reading, writing and backlight, confirmed on hardware. The id is listed under another format, but this keypad answers the identify command like a Standard one, so the tool switches to Standard when it connects. |
++> | `514c:8850`, anything else | Writing works in principle, but is untested. No backlight control, and no read-back. Only applies to a keypad that does not answer the identify command. |
+ >
+ > "Untested" means the code was written from other people's research and has
+ > never been tried on real hardware. It will tell you so when you connect.
+@@ -121,7 +123,7 @@
+ | 9 | 3 | 3×3 | — |
+ | 11 | 3 | 4×3 | — |
+ | 12 | 2 | 3×4 | yes — the unit this tool was written against |
+-| 12 | 4 | 3×4 | yes — SikaiCase 1189:8842, reported by @geniosid |
++| 12 | 4 | 3×4 | yes — SikaiCase 1189:8842, reported by @geniosid; also a 514c:8850 unit |
+ | 12 | 3 | 4×3 | — |
+ | 15 | 3 | 5×3 | — |
+ | 16 | 0 | 4×4 | — |
+@@ -407,7 +409,9 @@
+   were themselves verified against real USB captures. This project's tests assert
+   against those same vectors.
+ - **The ch57x-3 dialect** (`514c:8850`), ported from its `k8850_4x4.rs`. Untested
+-  here; that implementation is the only public description of the protocol.
++  here, apart from one 12-key, 4-knob unit with that id that turned out to speak
++  the Standard format instead; that implementation is the only public description
++  of the protocol.
+ - **The vendor/product to dialect mapping**, from its `SUPPORTED_DEVICES` table —
+   including the detail that `1189:8850` and `514c:8850` differ despite sharing a
+   product id.
+diff -ruN a/docs/PROTOCOL.md b/docs/PROTOCOL.md
+--- a/docs/PROTOCOL.md	2026-10-19 09:15:58.838196725 +0000
++++ b/docs/PROTOCOL.md	2026-10-19 09:15:58.843595648 +0000
+@@ -64,9 +64,9 @@
+ 
+ | Dialect | In the app | Devices | Write command | On hardware |
+ |---|---|---|---|---|
+-| **ch57x-1** | Standard | `1189:8840`, `1189:8842`, `1189:8850`, `514c:8851` | `0xFE` | yes |
++| **ch57x-1** | Standard | `1189:8840`, `1189:8842`, `1189:8850`, `514c:8851`, and `514c:8850` on a 12-key, 4-knob unit (see below) | `0xFE` | yes |
+ | ch57x-2 | Alternative A | `1189:8890` | different framing | key bindings, one pad ([#4](https://github.com/jvspier/macropad-rebind/issues/4)) |
+-| ch57x-3 | Alternative B | `514c:8850` | `0xFD` | no |
++| ch57x-3 | Alternative B | `514c:8850`, on units that do not answer `0xFB` | `0xFD` | no |
+ | lctech | Alternative C | `1189:8890` reporting as **"LCKEY"** | one report per binding | no |
+ 
+ Note that **`1189:8850` and `514c:8850` share a product id and differ** — so any
+@@ -90,10 +90,45 @@
+ [ch57x-keyboard-tool](https://github.com/kriomant/ch57x-keyboard-tool)'s
+ `SUPPORTED_DEVICES` table, which has separate implementations per dialect.
+ 
++### `514c:8850` is at least two different keypads
++
++That table files `514c:8850` under ch57x-3, and for the 4x4 pads it was written
++for that is presumably right. It is not right for every unit with that id. A
++12-key, 4-knob pad enumerating as "USB Composite Device" — one HID collection on
++usage page `0xFF00`, input and output report 3 at 64 bytes each — behaves as the
++Standard format in every respect tried:
++
++| Sent | Result |
++|---|---|
++| `FB FB FB` | replies `FB 0C 04`: 12 keys, 4 knobs |
++| `FA 0F 03 <layer>` | 24 records in the Standard layout: slots 1–12, the fourth encoder at `0x0D`–`0x0F`, then `0x10`–`0x18` |
++| `FE` records, each followed by `AA AA` / `FD FE FF` / `AA AA` | 72 bindings written (24 slots × 3 layers) and read back matching the editor |
++| `FE B0 <layer+1> 08 00 00 00 00 00 01 00 <code>`, then `FD FE FF` | backlight changes, separately for each layer |
++
++The slot arrangement is the one the README's model table gives for the 12-key,
++4-encoder SikaiCase `1189:8842`: three encoders at `0x10`–`0x18` and the fourth
++stored below the keys, which only answers to a read addressed as 15 keys and 3
++knobs.
++
++An id table cannot tell the two kinds of `514c:8850` apart, so the app asks. For
++an id filed under ch57x-3 it sends `0xFB`, which is a read and changes nothing.
++If the reply begins with `0xFB` and
++gives a layout the Standard format can address — at most 15 keys and 4 knobs, at
++least one of either — the keypad is treated as Standard for that connection. A
++keypad that stays silent, or answers with anything else, keeps the format its id
++says. No other format is asked: `1189:8890` has key bindings confirmed under
++ch57x-2 and a disputed format already, so it is left as it is, and LCTECH's
++expects nothing but its own reports.
++
++A real ch57x-3 pad is expected to stay silent, which is what keeps this safe,
++but nobody here has one to confirm it. If you have one, the log line "Reply does
++not begin with 0xFB" or "No reply" on connect is the thing to report.
++
+ ### ch57x-3 (514C:8850)
+ 
+ Ported here from ch57x-keyboard-tool's `k8850_4x4.rs` and **not verified against
+-hardware** — nobody working on this has one. Payload offsets below exclude the
++hardware** — nobody working on this has a unit that speaks it. (The one
++`514c:8850` pad that was tried speaks the Standard format; see above.) Payload offsets below exclude the
+ report id, as elsewhere.
+ 
+     [0]     0xFD          write
+diff -ruN a/index.html b/index.html
+--- a/index.html	2026-10-19 09:15:58.698554248 +0000
++++ b/index.html	2026-10-19 09:15:58.840887166 +0000
+@@ -104,8 +104,8 @@
+   background:linear-gradient(180deg,#101317,#0b0d10);
+   border-radius:4px;border:1px solid var(--line-soft);
+ }
+-.knobs{display:flex;gap:2.2rem;justify-content:center;flex-wrap:wrap}
+-.knob{display:flex;flex-direction:column;align-items:center;gap:.45rem}
++.knobs{display:flex;gap:1.2rem 1.5rem;justify-content:center;flex-wrap:wrap}
++.knob{display:flex;flex-direction:column;align-items:center;gap:.45rem;width:8.4rem}
+ .knob-dial{
+   width:74px;height:74px;border-radius:50%;
+   background:radial-gradient(circle at 38% 30%,#3a4149,#171a1e 70%);
+@@ -114,20 +114,24 @@
+   box-shadow:0 4px 14px rgba(0,0,0,.5);
+ }
+ .knob-dial::after{content:"";position:absolute;top:7px;width:2px;height:16px;border-radius:1px;background:#c3ccd6}
+-.knob-dial button{
+-  width:38px;height:38px;border-radius:50%;padding:0;
+-  font-family:var(--mono);font-size:.62rem;
+-  background:#0f1215;border:1px solid #2e353d;color:var(--ink-2);
+-}
+-.knob-dial button.bound{border-color:var(--led);color:var(--led)}
+-.knob-dial button.sel{background:var(--led);border-color:var(--led);color:#fff}
+-.knob-rot{display:flex;gap:.35rem}
+-.knob-rot button{
+-  font-family:var(--mono);font-size:.66rem;padding:.22rem .5rem;min-width:44px;
+-  background:#0f1215;
+-}
+-.knob-rot button.bound{border-color:var(--led);color:var(--led)}
+-.knob-rot button.sel{background:var(--led);border-color:var(--led);color:#fff}
++/* Each knob lists its three actions in the order they happen on the hardware —
++   turn left, press, turn right — each showing what it is bound to, the way a
++   keycap does, so nothing hides behind a hover tooltip. */
++.knob-acts{display:flex;flex-direction:column;gap:.25rem;width:100%}
++button.knob-act{
++  display:flex;align-items:center;gap:.4rem;width:100%;
++  padding:.3rem .45rem;text-align:left;
++  font-family:var(--mono);font-size:.7rem;line-height:1.3;
++  background:#0f1215;border:1px solid #2b3138;
++}
++button.knob-act .g{flex:none;width:1em;text-align:center;color:var(--dim)}
++button.knob-act .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
++button.knob-act.empty .t{color:var(--dim);font-style:italic}
++button.knob-act.bound{border-color:var(--led-dim)}
++button.knob-act.bound .g{color:var(--led)}
++button.knob-act.sel{background:var(--led);border-color:var(--led)}
++button.knob-act.sel .g,button.knob-act.sel .t{color:#fff}
++@media (max-width:480px){ .knobs{gap:1rem} .knob{width:calc(50% - .5rem)} }
+ .knob-label{font-family:var(--mono);font-size:.62rem;letter-spacing:.11em;text-transform:uppercase;color:var(--dim)}
+ 
+ .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.55rem;width:min(100%,340px)}
+@@ -471,6 +475,8 @@
+   // Alternative A (confirmed on a 6-key one). The product name decides.
+   { vid: 0x1189, pid: 0x8890, product: "LCKEY", dialect: "lctech" },
+   { vid: 0x1189, pid: 0x8890, dialect: "ch57x-2" },
++  // Not every unit with this id speaks ch57x-3: a 12-key, 4-knob one answers 0xFB
++  // like the standard format, and connect() moves it there. See docs/PROTOCOL.md.
+   { vid: 0x514C, pid: 0x8850, dialect: "ch57x-3" },
+ ];
+ const IMPLEMENTED_DIALECT = "ch57x-1";
+@@ -866,6 +872,7 @@
+ let forcedDialect = null;            // user override; see the format selector
+ let formatHintShown = false;         // reveal the format selector once it matters
+ let verified = false;      // device has answered 0xFB with a usable layout
++let answered = false;      // ...and it really did answer, rather than there being nothing to ask
+ let captureArmed = false;
+ 
+ function loadProfile() {
+@@ -1501,6 +1508,23 @@
+   el.className = "status" + (cls ? " " + cls : "");
+ }
+ 
++/** Is this (keys, knobs) answer something the given format can address? */
++const layoutFits = (f, caps) =>
++  f.keys <= caps.maxKeys && f.knobs <= MAX_KNOBS && (f.keys + f.knobs) > 0;
++
++/** The controls whose availability depends on what the command format can do.
++    Called on connect and again whenever the format changes: connect() used to
++    set these once, so picking another format afterwards left Read greyed out
++    even for a format that can read. Blank and Repair need the keypad to have
++    actually answered, not merely to be assumed standard. */
++function applyCaps() {
++  const caps = effCaps();
++  $("btnRead").disabled   = !device || !caps.read;
++  $("btnDetect").disabled = !device || !caps.read;
++  $("btnBlank").disabled  = !device || !verified || !answered || !caps.tested;
++  $("btnRepair").disabled = !device || !verified || !answered || !caps.tested;
++}
++
+ async function connect(broad) {
+   try {
+     const list = await navigator.hid.requestDevice({
+@@ -1585,6 +1609,28 @@
+     // (a test enforces it), so effCaps() always has something to return.
+     const model = modelFor(device.vendorId, device.productId, device.productName);
+     dialect = model ? model.dialect : IMPLEMENTED_DIALECT;
++
++    // The USB id picks a format, but an id is only a guess: 514c:8850 is filed
++    // under a format with no read command, yet at least one 12-key, 4-knob unit
++    // with that id answers 0xFB and 0xFA exactly like the standard format, and
++    // so was left with Read and lighting switched off for no reason. A keypad
++    // that answers the standard identify command with a layout the standard
++    // format can address is speaking it, whatever the table says. 0xFB is a
++    // read, so asking costs nothing. Only ch57x-3 is asked, on purpose: that is
++    // the format with evidence against it. ch57x-2 (1189:8890) has key bindings
++    // confirmed on hardware and its format is already disputed, so it is not
++    // second-guessed here; LCTECH's expects nothing but its own reports.
++    let found = null;
++    if (!forcedDialect && dialect === "ch57x-3") {
++      const early = await detect(true);
++      if (early && layoutFits(early, DIALECT_CAPS[IMPLEMENTED_DIALECT])) {
++        log(`This keypad's USB id is listed under the "${dialectName(dialect)}" format, but it ` +
++            `answers the standard read commands, so it is being treated as "` +
++            `${dialectName(IMPLEMENTED_DIALECT)}". Reading and lighting are switched on.`, "g");
++        dialect = IMPLEMENTED_DIALECT;
++        found = early;
++      }
++    }
+     const caps = effCaps();
+     // Knob slots may be numbered differently here than on the last keypad.
+     alignKnobBase();
+@@ -1616,11 +1662,10 @@
+     // to one of those could misconfigure it. Answering 0xFB with a plausible
+     // layout is proof it really does speak this protocol.
+ 
+-    let found = null;      // needed again below, so not block-scoped
+     if (caps.read) {
+-      found = await detect();
+-      verified = !!found && found.keys <= caps.maxKeys && found.knobs <= MAX_KNOBS
+-                 && (found.keys + found.knobs) > 0;
++      found = found || await detect();
++      verified = !!found && layoutFits(found, caps);
++      answered = verified;
+     } else {
+       // Nothing to ask, so nothing to verify. Trust the user's model choice.
+       verified = true;
+@@ -1629,8 +1674,7 @@
+       $("btnWrite").disabled = false;
+       // Blanking and identity repair both rely on ch57x-1 specifics — the empty
+       // record shape and 0xFC — neither of which is known for other dialects.
+-      $("btnBlank").disabled = !caps.tested;
+-      $("btnRepair").disabled = !caps.tested;
++      applyCaps();
+       const known = found && findLayout(found.keys, found.knobs);
+       if (known && (known.keys !== layout.keys || known.knobs !== layout.knobs)) {
+         setLayout(known);
+@@ -1672,6 +1716,7 @@
+   forcedDialect = null;
+   formatHintShown = false;
+   verified = false;
++  answered = false;
+   setStatus("disconnected");
+   $("btnWrite").disabled = true;
+   $("btnDetect").disabled = true;
+@@ -1977,10 +2022,19 @@
+   log(`Layer ${layer + 1} cleared in the editor. Nothing was sent to the keypad.`, "g");
+ }
+ 
+-async function detect() {
++/** Ask the keypad for its layout. With `strict`, only a reply that begins with
++    the command it answers (0xFB) counts: the caller is using the answer as
++    evidence of which format the keypad speaks, so a stray report that merely
++    happens to arrive in the same window must not pass for one. */
++async function detect(strict) {
+   log("0xFB — identify layout (read only).", "w");
+   const got = (await Promise.all([collect(1, 600), send(msg([0xFB, 0xFB, 0xFB]))]))[0];
+   if (!got.length) { log("No reply.", "w"); return null; }
++  if (strict && got[0][0] !== 0xFB) {
++    log(`Reply does not begin with 0xFB (${hex(got[0].subarray(0, 4))}) — not an answer to the ` +
++        `identify command.`, "w");
++    return null;
++  }
+   const keys = got[0][1], knobs = got[0][2];
+   log(`Layout: ${keys} keys, ${knobs} knobs.`, "g");
+   return { keys, knobs };
+@@ -2192,39 +2246,42 @@
+ function renderKnobs() {
+   const wrap = $("knobs");
+   wrap.textContent = "";
++  const WHAT = { ccw: "turn left", press: "press", cw: "turn right" };
+   knobOrder(layout).forEach((k, kpos) => {
+     const box = document.createElement("div");
+     box.className = "knob";
+ 
++    // The dial is decoration; the three actions below are the controls.
+     const dial = document.createElement("div");
+     dial.className = "knob-dial";
+-    const pressSlot = knobSlot(k, 1);
+-    const pb = document.createElement("button");
+-    pb.type = "button";
+-    pb.textContent = KNOB_GLYPH.press;
+-    pb.className = (bindingFor(pressSlot) ? "bound" : "") + (sel?.slot === pressSlot ? " sel" : "");
+-    pb.title = `Knob ${kpos + 1} press — ` + bindingLabel(bindingFor(pressSlot));
+-    pb.onclick = () => select(pressSlot, `Knob ${kpos + 1} press`);
+-    dial.append(pb);
+-
+-    const rot = document.createElement("div");
+-    rot.className = "knob-rot";
+-    for (const a of [0, 2]) {
+-      const slot = knobSlot(k, a);
+-      const rb = document.createElement("button");
+-      rb.type = "button";
+-      rb.textContent = KNOB_GLYPH[KNOB_ACTIONS[a]];
+-      rb.className = (bindingFor(slot) ? "bound" : "") + (sel?.slot === slot ? " sel" : "");
+-      rb.title = `Knob ${kpos + 1} ${KNOB_ACTIONS[a]} — ` + bindingLabel(bindingFor(slot));
+-      rb.onclick = () => select(slot, `Knob ${kpos + 1} ${KNOB_ACTIONS[a]}`);
+-      rot.append(rb);
+-    }
+ 
+     const lbl = document.createElement("span");
+     lbl.className = "knob-label";
+     lbl.textContent = "Knob " + (kpos + 1);
+ 
+-    box.append(dial, rot, lbl);
++    const acts = document.createElement("div");
++    acts.className = "knob-acts";
++    KNOB_ACTIONS.forEach((name, a) => {
++      const slot = knobSlot(k, a);
++      const b = bindingFor(slot);
++      const row = document.createElement("button");
++      row.type = "button";
++      row.className = "knob-act" + (b ? " bound" : " empty") + (sel?.slot === slot ? " sel" : "");
++      const g = document.createElement("span");
++      g.className = "g";
++      g.textContent = KNOB_GLYPH[name];
++      const t = document.createElement("span");
++      t.className = "t";
++      t.textContent = b ? bindingLabel(b) : "unset";
++      row.append(g, t);
++      // Long macros are cut with an ellipsis here; the full text is the tooltip.
++      row.title = `Knob ${kpos + 1} ${WHAT[name]} — ` + (b ? bindingLabel(b) : "unbound");
++      row.setAttribute("aria-label", row.title);
++      row.onclick = () => select(slot, `Knob ${kpos + 1} ${name}`);
++      acts.append(row);
++    });
++
++    box.append(dial, lbl, acts);
+     wrap.append(box);
+   });
+ }
+@@ -2250,7 +2307,7 @@
+     sw.append(b);
+   }
+ 
+-  $("btnApplyLed").disabled = !device || !verified || !DIALECT_CAPS[dialect]?.led;
++  $("btnApplyLed").disabled = !device || !verified || !effCaps().led;
+   $("clearLayerName").textContent = `layer ${layer + 1}`;
+   $("blankLayerName").textContent = `layer ${layer + 1}`;
+   const r = ledReports(layer, led)[0];
+@@ -2711,6 +2768,7 @@
+     log(`This format has never been tested on real hardware — writing is at your own risk.`, "w");
+   // Formats disagree about where knob slots begin, so the editor's slots move.
+   alignKnobBase();
++  applyCaps();
+   renderAll();
+ };
+ $("orientPick").onchange = e => {
+diff -ruN a/test-app.mjs b/test-app.mjs
+--- a/test-app.mjs	2026-10-19 09:15:58.826239441 +0000
++++ b/test-app.mjs	2026-10-19 09:15:58.841139125 +0000
+@@ -98,7 +98,7 @@
+    Records are stored keyed by (layer, slot). The write message and the read
+    reply share one layout — only byte 0 differs, 0xFE vs 0xFA — so replaying a
+    stored write means swapping that byte and nothing else. */
+-function makeDevice({ keys = 12, knobs = 2, pid = 0x8842, knobSlotList = null,
++function makeDevice({ keys = 12, knobs = 2, pid = 0x8842, vid = 0x1189, silent = false, fbByte = 0xfb, knobSlotList = null,
+                       descriptor = null, usagePage = 0xff00, productName = "USB Composite Device" } = {}) {
+   const listeners = [];
+   const sent = [];
+@@ -135,7 +135,7 @@
+     for (const cb of listeners) cb({ reportId: bare ? 0 : 3, data });
+   };
+   return {
+-    vendorId: 0x1189, productId: pid, productName,
++    vendorId: vid, productId: pid, productName,
+     opened: false, collections: [{ usagePage, usage: 1, ...(descriptor || {}) }],
+     refused: 0,
+     sent,
+@@ -154,7 +154,8 @@
+       const raw = Array.from(data);
+       const b = bare && raw[0] === 0x03 ? raw.slice(1) : raw;
+       sent.push({ id, b, raw });
+-      if (b[0] === 0xfb) { emit([0xfb, keys, knobs]); return; }
++      if (silent && (b[0] === 0xfb || b[0] === 0xfa)) return;
++      if (b[0] === 0xfb) { emit([fbByte, keys, knobs]); return; }
+       if (b[0] === 0xfe && !this.deaf) {
+         // b[1] slot, b[2] layer (1-based). Store it as the read reply.
+         const layer = (b[2] || 1) - 1, slot = b[1];
+@@ -563,6 +564,106 @@
+ ok("a slot below the base is never a negative knob",
+    !/knob 0|undefined/.test(app.slotName(13, pos)));
+ 
++console.log("\na USB id filed under another format, but the keypad answers the standard one");
++// 514c:8850 is listed as ch57x-3, which has no read or lighting command. A
++// 12-key, 4-knob unit with that id answers 0xFB and 0xFA like the standard
++// format, and was left with Read and lighting disabled. The keypad's own
++// answer should overrule the id table.
++const KNOBS4 = [0x10,0x11,0x12, 0x13,0x14,0x15, 0x16,0x17,0x18, 0x0D,0x0E,0x0F];
++const d8850 = makeDevice({ vid: 0x514c, pid: 0x8850, keys: 12, knobs: 4, knobSlotList: KNOBS4 });
++current = d8850; app.disconnected();
++const before8850 = logText().length;
++await app.connect(false);
++const log8850 = logText().slice(before8850);
++eq("it is treated as the standard format", app.effDialect(), "ch57x-1");
++ok("  and the log says why", /answers the standard read commands/.test(log8850));
++eq("  Read is enabled",            app.$("btnRead").disabled, false);
++eq("  Detect is enabled",          app.$("btnDetect").disabled, false);
++eq("  Apply lighting is enabled",  app.$("btnApplyLed").disabled, false);
++eq("  Write is enabled",           app.$("btnWrite").disabled, false);
++eq("  the 12+4 layout is adopted", `${app.layoutOf().keys}/${app.layoutOf().knobs}`, "12/4");
++ok("  no 'untested format' warning", !/never been tried on real hardware/.test(log8850));
++d8850.sent.length = 0;
++await app.readAll();
++eq("  a full read returns 24 records", Object.keys(app.profile().layers[0].bindings).length, 24);
++app.profile().layers[0].bindings[1] = { type: "key", steps: [{ mods: 0x01, code: 0x06 }], delay: 0 };
++d8850.sent.length = 0;
++const before8850w = logText().length;
++await app.writeAll();
++ok("  a write verifies", /Verified/.test(logText().slice(before8850w)));
++// 0xFD also begins the standard format's commit (FD FE FF); what marks the
++// other format is a 0xFD *binding*, whose second byte is a slot, not 0xFE.
++ok("  and was sent in the standard format (0xFE records), not as 0xFD bindings",
++   d8850.sent.some(r => r.b[0] === 0xfe) &&
++   !d8850.sent.some(r => r.b[0] === 0xfd && r.b[1] !== 0xfe));
++current = device; app.disconnected();
++
++console.log("\n  but a keypad that stays silent keeps the format its id says");
++const mute = makeDevice({ vid: 0x514c, pid: 0x8850, silent: true });
++current = mute; app.disconnected();
++await app.connect(false);
++eq("it stays ch57x-3", app.effDialect(), "ch57x-3");
++eq("  Read stays disabled", app.$("btnRead").disabled, true);
++eq("  Apply lighting stays disabled", app.$("btnApplyLed").disabled, true);
++eq("  Repair stays disabled (nothing answered)", app.$("btnRepair").disabled, true);
++ok("  only a wake-up and 0xFB were sent, no writes",
++   mute.sent.every(r => r.b.every(x => x === 0) || r.b[0] === 0xfb));
++console.log("\n  and picking a format by hand refreshes the controls");
++app.$("formatPick").onchange({ target: { value: "ch57x-1" } });
++eq("forcing Standard enables Read", app.$("btnRead").disabled, false);
++eq("  and Apply lighting", app.$("btnApplyLed").disabled, false);
++eq("  but not Repair — the keypad never answered", app.$("btnRepair").disabled, true);
++app.$("formatPick").onchange({ target: { value: "" } });
++eq("back to automatic disables Read again", app.$("btnRead").disabled, true);
++current = device; app.disconnected();
++
++console.log("\n  and so does one whose only reply is not an answer to 0xFB");
++const stray = makeDevice({ vid: 0x514c, pid: 0x8850, fbByte: 0xaa });
++current = stray; app.disconnected();
++const beforeStray = logText().length;
++await app.connect(false);
++eq("a reply not starting with 0xFB is not evidence", app.effDialect(), "ch57x-3");
++ok("  and the log says why", /does not begin with 0xFB/.test(logText().slice(beforeStray)));
++eq("  Read stays disabled", app.$("btnRead").disabled, true);
++current = device; app.disconnected();
++
++console.log("\n  and the probe is for 514c:8850 only: a 1189:8890 that answers 0xFB keeps its format");
++// 8890 has key bindings confirmed under ch57x-2 on real hardware, and its format
++// is disputed; being able to answer a read is not a reason to move it.
++const p8890 = makeDevice({ pid: 0x8890, productName: "6 Key Pad" });
++current = p8890; app.disconnected();
++await app.connect(false);
++eq("it stays ch57x-2", app.effDialect(), "ch57x-2");
++ok("  and 0xFB was never sent to it", !p8890.sent.some(r => r.b[0] === 0xfb));
++current = device; app.disconnected();
++
++console.log("\nknob bindings are shown on the knobs, not only in a tooltip");
++// Each knob lists turn-left, press and turn-right with what they are bound to,
++// the way a keycap does. They used to be bare glyphs with the binding in a
++// hover tooltip, so a pad's knobs could not be read at a glance.
++app.setLayout({ ...app.LAYOUTS.find(l => l.keys === 12 && l.knobs === 4), natural: "normal" });
++const kp = app.profile();
++for (const l of kp.layers) l.bindings = {};
++kp.layers[0].bindings[0x10] = { type: "key", steps: [{ mods: 0x01, code: 0x1d }], delay: 0 };  // knob 1 ccw: Ctrl+Z
++kp.layers[0].bindings[0x12] = { type: "media", media: 0xe9 };                                    // knob 1 cw: volume up
++kp.layers[0].bindings[0x0E] = { type: "key", steps: [{ mods: 0, code: 0x58 }], delay: 0 };       // knob 4 press: Num Enter
++app.renderAll();
++const rows = [];
++const collect = n => { if (!n) return;
++  if (/\bknob-act\b/.test(n.className || "")) rows.push(n);
++  (n.children || []).forEach(collect); };
++collect(app.$("knobs"));
++eq("four knobs, three actions each", rows.length, 12);
++eq("knob 1 turn left shows its shortcut",  rows[0].textContent.includes("Ctrl+Z"), true);
++eq("knob 1 turn right shows its media key", rows[2].textContent.includes("Volume up"), true);
++eq("knob 4 press shows its key (stored below the keys)", rows[10].textContent.includes("Num Enter"), true);
++eq("an unbound action says so", rows[1].textContent.includes("unset"), true);
++ok("  and is styled as empty", /\bempty\b/.test(rows[1].className));
++ok("a bound action is styled as bound", /\bbound\b/.test(rows[0].className));
++ok("the full text is still the tooltip", rows[0].title.includes("Ctrl+Z") && /turn left/.test(rows[0].title));
++rows[4].onclick();                               // knob 2 press
++eq("clicking a row selects that action", app.$("editorTitle").textContent, "Knob 2 press");
++
+ console.log("\nan override does not outlive the keypad it was set for");
+ app.setForced("ch57x-3");
+ eq("the override is in force", app.effDialect(), "ch57x-3");

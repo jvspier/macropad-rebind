@@ -62,7 +62,8 @@ appear at all. Pick your keypad; the log prints its id and HID usage pages, so
 a report is enough to get it added.
 
 > **Not every model takes the same commands.** Three command formats exist and
-> the right one is chosen automatically from your keypad's USB id. You should
+> the right one is chosen automatically from your keypad's USB id, and corrected
+> if the keypad answers the identify command like a Standard one. You should
 > never have to think about this — but if your keys do not respond after writing,
 > a dropdown appears next to the model picker that sends a different format.
 >
@@ -70,7 +71,8 @@ a report is enough to get it added.
 > |---|---|
 > | `1189:8840`, `1189:8842`, `1189:8850`, `1189:8851`, `514c:8851` | Everything works. This is the format the tool was built and tested against. |
 > | `1189:8890` | Writing works in principle, but is untested and sources disagree about this model — try both formats. No backlight control, and the tool cannot read the keypad back. |
-> | `514c:8850` | Writing works in principle, but is untested. No backlight control, and no read-back. |
+> | `514c:8850`, 12 keys and 4 knobs | Everything works: reading, writing and backlight, confirmed on hardware. The id is listed under another format, but this keypad answers the identify command like a Standard one, so the tool switches to Standard when it connects. |
+> | `514c:8850`, anything else | Writing works in principle, but is untested. No backlight control, and no read-back. Only applies to a keypad that does not answer the identify command. |
 >
 > "Untested" means the code was written from other people's research and has
 > never been tried on real hardware. It will tell you so when you connect.
@@ -121,7 +123,7 @@ marked confirmed, or corrected.
 | 9 | 3 | 3×3 | — |
 | 11 | 3 | 4×3 | — |
 | 12 | 2 | 3×4 | yes — the unit this tool was written against |
-| 12 | 4 | 3×4 | yes — SikaiCase 1189:8842, reported by @geniosid |
+| 12 | 4 | 3×4 | yes — SikaiCase 1189:8842, reported by @geniosid; also a 514c:8850 unit by @loudbeatproductions |
 | 12 | 3 | 4×3 | — |
 | 15 | 3 | 5×3 | — |
 | 16 | 0 | 4×4 | — |
@@ -407,7 +409,9 @@ This project owes a great deal to
   were themselves verified against real USB captures. This project's tests assert
   against those same vectors.
 - **The ch57x-3 dialect** (`514c:8850`), ported from its `k8850_4x4.rs`. Untested
-  here; that implementation is the only public description of the protocol.
+  here, apart from one 12-key, 4-knob unit with that id that turned out to speak
+  the Standard format instead; that implementation is the only public description
+  of the protocol.
 - **The vendor/product to dialect mapping**, from its `SUPPORTED_DEVICES` table —
   including the detail that `1189:8850` and `514c:8850` differ despite sharing a
   product id.
