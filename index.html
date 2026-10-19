@@ -866,6 +866,7 @@ let dialect = IMPLEMENTED_DIALECT;   // detected from the device on connect
 let forcedDialect = null;            // user override; see the format selector
 let formatHintShown = false;         // reveal the format selector once it matters
 let verified = false;      // device has answered 0xFB with a usable layout
+let answered = false;      // ...and it really did answer, rather than there being nothing to ask
 let captureArmed = false;
 
 function loadProfile() {
@@ -1501,6 +1502,23 @@ function setStatus(text, cls) {
   el.className = "status" + (cls ? " " + cls : "");
 }
 
+/** Is this (keys, knobs) answer something the given format can address? */
+const layoutFits = (f, caps) =>
+  f.keys <= caps.maxKeys && f.knobs <= MAX_KNOBS && (f.keys + f.knobs) > 0;
+
+/** The controls whose availability depends on what the command format can do.
+    Called on connect and again whenever the format changes: connect() used to
+    set these once, so picking another format afterwards left Read greyed out
+    even for a format that can read. Blank and Repair need the keypad to have
+    actually answered, not merely to be assumed standard. */
+function applyCaps() {
+  const caps = effCaps();
+  $("btnRead").disabled   = !device || !caps.read;
+  $("btnDetect").disabled = !device || !caps.read;
+  $("btnBlank").disabled  = !device || !verified || !answered || !caps.tested;
+  $("btnRepair").disabled = !device || !verified || !answered || !caps.tested;
+}
+
 async function connect(broad) {
   try {
     const list = await navigator.hid.requestDevice({
@@ -1585,6 +1603,28 @@ async function connect(broad) {
     // (a test enforces it), so effCaps() always has something to return.
     const model = modelFor(device.vendorId, device.productId, device.productName);
     dialect = model ? model.dialect : IMPLEMENTED_DIALECT;
+
+    // The USB id picks a format, but an id is only a guess: 514c:8850 is filed
+    // under a format with no read command, yet at least one 12-key, 4-knob unit
+    // with that id answers 0xFB and 0xFA exactly like the standard format, and
+    // so was left with Read and lighting switched off for no reason. A keypad
+    // that answers the standard identify command with a layout the standard
+    // format can address is speaking it, whatever the table says. Only the
+    // formats with no read command are asked (nothing to lose: 0xFB is a read),
+    // and LCTECH's is left alone because it never expects anything but its own
+    // reports.
+    let found = null;
+    if (!forcedDialect && dialect !== IMPLEMENTED_DIALECT && dialect !== "lctech"
+        && !DIALECT_CAPS[dialect]?.read) {
+      const early = await detect();
+      if (early && layoutFits(early, DIALECT_CAPS[IMPLEMENTED_DIALECT])) {
+        log(`This keypad's USB id is listed under the "${dialectName(dialect)}" format, but it ` +
+            `answers the standard read commands, so it is being treated as "` +
+            `${dialectName(IMPLEMENTED_DIALECT)}". Reading and lighting are switched on.`, "g");
+        dialect = IMPLEMENTED_DIALECT;
+        found = early;
+      }
+    }
     const caps = effCaps();
     // Knob slots may be numbered differently here than on the last keypad.
     alignKnobBase();
@@ -1616,11 +1656,10 @@ async function connect(broad) {
     // to one of those could misconfigure it. Answering 0xFB with a plausible
     // layout is proof it really does speak this protocol.
 
-    let found = null;      // needed again below, so not block-scoped
     if (caps.read) {
-      found = await detect();
-      verified = !!found && found.keys <= caps.maxKeys && found.knobs <= MAX_KNOBS
-                 && (found.keys + found.knobs) > 0;
+      found = found || await detect();
+      verified = !!found && layoutFits(found, caps);
+      answered = verified;
     } else {
       // Nothing to ask, so nothing to verify. Trust the user's model choice.
       verified = true;
@@ -1629,8 +1668,7 @@ async function connect(broad) {
       $("btnWrite").disabled = false;
       // Blanking and identity repair both rely on ch57x-1 specifics — the empty
       // record shape and 0xFC — neither of which is known for other dialects.
-      $("btnBlank").disabled = !caps.tested;
-      $("btnRepair").disabled = !caps.tested;
+      applyCaps();
       const known = found && findLayout(found.keys, found.knobs);
       if (known && (known.keys !== layout.keys || known.knobs !== layout.knobs)) {
         setLayout(known);
@@ -1672,6 +1710,7 @@ function disconnected() {
   forcedDialect = null;
   formatHintShown = false;
   verified = false;
+  answered = false;
   setStatus("disconnected");
   $("btnWrite").disabled = true;
   $("btnDetect").disabled = true;
@@ -2250,7 +2289,7 @@ function renderLed() {
     sw.append(b);
   }
 
-  $("btnApplyLed").disabled = !device || !verified || !DIALECT_CAPS[dialect]?.led;
+  $("btnApplyLed").disabled = !device || !verified || !effCaps().led;
   $("clearLayerName").textContent = `layer ${layer + 1}`;
   $("blankLayerName").textContent = `layer ${layer + 1}`;
   const r = ledReports(layer, led)[0];
@@ -2711,6 +2750,7 @@ $("formatPick").onchange = e => {
     log(`This format has never been tested on real hardware — writing is at your own risk.`, "w");
   // Formats disagree about where knob slots begin, so the editor's slots move.
   alignKnobBase();
+  applyCaps();
   renderAll();
 };
 $("orientPick").onchange = e => {
