@@ -582,6 +582,9 @@ eq("  Detect is enabled",          app.$("btnDetect").disabled, false);
 eq("  Apply lighting is enabled",  app.$("btnApplyLed").disabled, false);
 eq("  Write is enabled",           app.$("btnWrite").disabled, false);
 eq("  the 12+4 layout is adopted", `${app.layoutOf().keys}/${app.layoutOf().knobs}`, "12/4");
+// Repair sends 0xFC with the chosen model; its description must name that
+// model, not the "12 keys, 2 knobs" it used to say for every pad.
+eq("  and Repair says what it would declare", app.$("repairShape").textContent, "12 keys, 4 knobs");
 ok("  no 'untested format' warning", !/never been tried on real hardware/.test(log8850));
 d8850.sent.length = 0;
 await app.readAll();
@@ -613,6 +616,7 @@ app.$("formatPick").onchange({ target: { value: "ch57x-1" } });
 eq("forcing Standard enables Read", app.$("btnRead").disabled, false);
 eq("  and Apply lighting", app.$("btnApplyLed").disabled, false);
 eq("  but not Repair — the keypad never answered", app.$("btnRepair").disabled, true);
+eq("  nor Blank, for the same reason", app.$("btnBlank").disabled, true);
 app.$("formatPick").onchange({ target: { value: "" } });
 eq("back to automatic disables Read again", app.$("btnRead").disabled, true);
 current = device; app.disconnected();
@@ -625,6 +629,16 @@ await app.connect(false);
 eq("a reply not starting with 0xFB is not evidence", app.effDialect(), "ch57x-3");
 ok("  and the log says why", /does not begin with 0xFB/.test(logText().slice(beforeStray)));
 eq("  Read stays disabled", app.$("btnRead").disabled, true);
+current = device; app.disconnected();
+
+console.log("\n  and one whose answer describes a layout Standard cannot address");
+// Answering 0xFB is evidence only if the layout fits the format being switched
+// to: Standard stops at 15 keys, and a 4x4 pad of the other format answering
+// "16 keys" must not be moved onto it, where key 16 would land on a knob slot.
+const big = makeDevice({ vid: 0x514c, pid: 0x8850, keys: 16, knobs: 0 });
+current = big; app.disconnected();
+await app.connect(false);
+eq("16 keys keeps the format the id says", app.effDialect(), "ch57x-3");
 current = device; app.disconnected();
 
 console.log("\n  and the probe is for 514c:8850 only: a 1189:8890 that answers 0xFB keeps its format");

@@ -402,7 +402,7 @@ dialog h3{font-family:var(--disp);font-size:1.05rem;margin:0;letter-spacing:-.01
         <p class="hint">Empties every binding on <b id="clearLayerName">layer 1</b> <em>in this page only</em>.
         The keypad keeps working exactly as it does now until you write.</p>
         <button id="btnRepair" class="wide" disabled>Repair device identity</button>
-        <p class="hint">Re-declares the keypad as <b>12 keys, 2 knobs</b> and rewrites the backlight. Use this if
+        <p class="hint">Re-declares the keypad as the model chosen above — <b id="repairShape">12 keys, 2 knobs</b> — and rewrites the backlight. Use this if
         only some keys light up or respond — that means the keypad has been told it is a different model. Key
         bindings are not affected.</p>
         <button id="btnBlank" class="wide danger" disabled>Blank this layer on the keypad</button>
@@ -2174,6 +2174,11 @@ function renderOrientPick() {
 }
 
 function renderLayoutPick() {
+  // Repair sends whatever model is chosen here, so its description has to say
+  // which. It used to read "12 keys, 2 knobs" whatever was connected — accurate
+  // only for the one pad this tool started on.
+  $("repairShape").textContent =
+    `${layout.keys} keys, ${layout.knobs} knob${layout.knobs === 1 ? "" : "s"}`;
   const sel2 = $("layoutPick");
   sel2.textContent = "";
   let matched = false;
